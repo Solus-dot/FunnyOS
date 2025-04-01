@@ -1,10 +1,18 @@
-[ORG 0x7C00]            ; This directive (not instruction) tells BIOS to load bootloader at 0x7C00
+[ORG 0x00]
 [BITS 16]               ; Bootloader running in 16 bit mode (Real mode)
 
 %define ENDL 0x0D, 0x0A
 
 start:
-    jmp main
+    ; Print intro message
+    mov si, message1
+    call puts
+
+.halt:
+    cli
+    hlt                 ; Stops CPU from executing
+
+
 
 ; Prints a string to the screen
 ; Params:
@@ -30,26 +38,4 @@ puts:
     pop si
     ret
 
-
-main:
-    ; setup data segments
-    mov ax, 0           ; Cannot write to ds/es directly\
-    mov ds, ax
-    mov es, ax
-
-    ; setup stack
-    mov ss, ax
-    mov sp, 0x7C00      ; stack grows downwards from where we loaded our memory
-
-    mov si, message1
-    call puts
-
-    hlt                 ; Stops CPU from executing
-
-.halt:
-    jmp .halt           ; Infinite Loop
-
 message1: db 'Hello Guys, FunnyOS Here!', ENDL, 0
-
-times 510-($-$$) db 0   ; Fill remaining space with zeros (510 bytes + the boot signature bytes 0x55 and 0xAA, ensuring 512 bytes in boot sector)
-dw 0xAA55               ; boot signature
