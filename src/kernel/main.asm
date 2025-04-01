@@ -12,8 +12,6 @@ start:
     cli
     hlt                 ; Stops CPU from executing
 
-
-
 ; Prints a string to the screen
 ; Params:
 ;   - ds:si points to string

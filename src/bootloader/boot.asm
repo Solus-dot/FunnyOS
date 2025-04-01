@@ -29,9 +29,10 @@ ebr_drive_number:           db 0                        ; 0x00 floppy, 0x80 hdd
                             db 0                        ; Reserved byte
 ebr_signature:              db 0x29
 ebr_volume_id:              db 0x11, 0x69, 0x42, 0x13   ; Serial number, values don't matter
-ebr_volume_label:           db 'FunnyOS    '            ; 11 bytes, padded with spaces
+ebr_volume_label:           db '  FunnyOS  '            ; 11 bytes, padded with spaces
 ebr_system_id:              db 'FAT12   '               ; 8 bytes, padded with spaces
 
+; CODE GOES HERE
 
 start:
     ; Setup data segments
@@ -54,11 +55,6 @@ start:
     ; Read something from the floppy disk
     ; BIOS should set DL to drive number
     mov [ebr_drive_number], dl
-
-    mov ax, 1           ; LBA=1, second sector from disk
-    mov cl, 1           ; 1 sector to read
-    mov bx, 0x7E00      ; Data should be after the bootloader
-    call disk_read
 
     ; Show loading message
     mov si, msg_loading
@@ -106,7 +102,6 @@ start:
     mov dl, [ebr_drive_number]          ; dl = Drive number (We saved it previously)
     mov bx, buffer                      ; es:bx = buffer
     call disk_read
-
 
     ; Search for kernel.bin
     xor bx, bx
@@ -348,9 +343,9 @@ disk_reset:
     ret
 
 
-msg_loading:            db 'Loading...' , ENDL, 0
-msg_read_failed:        db 'Read from disk fail', ENDL, 0
-msg_kernel_not_found:   db 'KERNEL.BIN not found', ENDL, 0
+msg_loading:            db 'Loading...', ENDL, 0
+msg_read_failed:        db 'Read from disk failed!', ENDL, 0
+msg_kernel_not_found:   db 'KERNEL.BIN file not found!', ENDL, 0
 file_kernel_bin:        db 'KERNEL  BIN'
 kernel_cluster:         dw 0
 
