@@ -15,6 +15,15 @@ void puts(const char* str)
     }
 }
 
+void puts_f(const char far* str)
+{
+    while(*str)
+    {
+        putc(*str);
+        str++;
+    }
+}
+
 #define PRINTF_STATE_NORMAL         0
 #define PRINTF_STATE_LENGTH         1
 #define PRINTF_STATE_LENGTH_SHORT   2
@@ -38,7 +47,8 @@ void _cdecl printf(const char* fmt, ...)
     bool sign = false;
 
     argp++;
-    while(*fmt)
+
+    while (*fmt)
     {
         switch (state)
         {
@@ -46,8 +56,11 @@ void _cdecl printf(const char* fmt, ...)
                 switch (*fmt)
                 {
                     case '%':   state = PRINTF_STATE_LENGTH;
-                    default:    putc(*fmt); break;
+                                break;
+                    default:    putc(*fmt);
+                                break;
                 }
+                break;
 
             case PRINTF_STATE_LENGTH:
                 switch (*fmt)
@@ -88,18 +101,30 @@ void _cdecl printf(const char* fmt, ...)
                                 argp++;
                                 break;
 
-                    case 's':   puts(*(char**)argp);
-                                argp++;
+                    case 's':   if (length == PRINTF_LENGTH_LONG || length == PRINTF_LENGTH_LONG_LONG) 
+                                {
+                                    puts_f(*(const char far**)argp);
+                                    argp += 2;
+                                }
+                                else 
+                                {
+                                    puts(*(const char**)argp);
+                                    argp++;
+                                }
                                 break;
 
                     case '%':   putc('%');
                                 break;
-                    
+
                     case 'd':
+                                radix = 10; sign = true;
+                                argp = printf_number(argp, length, sign, radix);
+                                break;
+                                
                     case 'i':   radix = 10; sign = true;
                                 argp = printf_number(argp, length, sign, radix);
                                 break;
-                    
+
                     case 'u':   radix = 10; sign = false;
                                 argp = printf_number(argp, length, sign, radix);
                                 break;
@@ -109,16 +134,16 @@ void _cdecl printf(const char* fmt, ...)
                     case 'p':   radix = 16; sign = false;
                                 argp = printf_number(argp, length, sign, radix);
                                 break;
-                    
+
                     case 'o':   radix = 8; sign = false;
                                 argp = printf_number(argp, length, sign, radix);
                                 break;
 
-                    // Ignore invalid specifier characters
+                    // ignore invalid spec
                     default:    break;
                 }
 
-                // Reset the state
+                // reset state
                 state = PRINTF_STATE_NORMAL;
                 length = PRINTF_LENGTH_DEFAULT;
                 radix = 10;
@@ -179,7 +204,6 @@ int* printf_number(int* argp, int length, bool sign, int radix)
             }
             argp += 2;
             break;
-
 
         case PRINTF_LENGTH_LONG_LONG:
             if (sign)

@@ -14,13 +14,13 @@ _x86_div64_32:
     push bx
 
     ; Divide upper 32 bits
-    mov eax, [bp + 4]   ; eax -> Upper Divisor
+    mov eax, [bp + 8]   ; eax -> Upper 32 bits of dividend
     mov ecx, [bp + 12]  ; ecx -> Divisor
     xor edx, edx
     div ecx             ; eax -> Quotient, edx -> Remainder
 
     ; Store upper 32 bits of quotient
-    mov ebx, [bp + 16]
+    mov bx, [bp + 16]
     mov [bx], eax
 
     ; Divide lower 32 bits
