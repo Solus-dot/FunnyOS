@@ -2,6 +2,7 @@
 
 section _ENTRY class=CODE   ; We will place everything next in the entry section
 
+; Name mangling: in CDECL convention, C functions are prepended with a _
 extern _cstart_         ; External cstart -> Entry point from C
 global entry            ; Entry is visible outside this asm file
 
