@@ -5,7 +5,7 @@ section _TEXT class=CODE
 ;
 ; U4D
 ;
-; Operation:      Unsigned 4 byte divide
+; Operation:      Unsigned 4 Byte Divide
 ; Inputs:         DX;AX   Dividend
 ;                 CX;BX   Divisor
 ; Outputs:        DX;AX   Quotient
@@ -28,6 +28,29 @@ __U4D:
     shr ecx, 16
     
     mov edx, eax
+    shr edx, 16
+
+    ret
+
+;
+; U4M
+; Operation:      Integer Four Byte Multiply
+; Inputs:         DX;AX   Integer M1
+;                 CX;BX   Integer M2
+; Outputs:        DX;AX   Product
+; Volatile:       CX, BX  Destroyed
+;
+global __U4M
+__U4M:
+    shl edx, 16         ; dx to upper half of edx
+    mov dx, ax          ; m1 in edx
+    mov eax, edx        ; m1 in eax
+
+    shl ecx, 16         ; cx to upper half of ecx
+    mov cx, bx          ; m2 in ecx
+
+    mul ecx             ; result in edx:eax (we only need eax)
+    mov edx, eax        ; move upper half to dx
     shr edx, 16
 
     ret
@@ -81,6 +104,10 @@ _x86_Video_WriteCharTeletype:
     ; Make new call frame
     push bp             ; Save old call frame
     mov bp, sp          ; Initialize new call frame
+
+    ; save bx
+    push bp             ; Save old call frame
+    push bx 
 
     ; [bp + 0] -> Old call frame
     ; [bp + 2] -> Return address (small memory model = 2 bytes)
@@ -139,17 +166,22 @@ _x86_Disk_Read:
     push bp             ; Save old call frame
     mov bp, sp          ; Initialize new call frame
 
+    ; save modified regs
+    push bx
+    push es 
+
     ; Setup arguments
     mov dl, [bp + 4]    ; dl - Drive
+
     mov ch, [bp + 6]    ; ch - Cylinder (lower 8 bits)
     mov cl, [bp + 7]    ; cl - Cylinder to bits 6-7
     shl cl, 6
+    
+    mov al, [bp + 8]    ; cl - Sector to bits 0-5
+    and al, 3Fh
+    or cl, al
 
-    mov dh, [bp + 10]    ; dh - Head
-
-    mov al, [bp + 8]
-    and al, 0x3F
-    or cl, al           ; cl - Sector to bits 0-5
+    mov dh, [bp + 10]   ; dh - Head
 
     mov al, [bp + 12]   ; al - Count
 

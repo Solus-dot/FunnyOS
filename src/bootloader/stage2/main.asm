@@ -8,6 +8,7 @@ global entry            ; Entry is visible outside this asm file
 
 entry:
     cli
+    ; Setup Stack
     mov ax, ds
     mov ss, ax
     mov sp, 0           ; Set pointers to 0 as boot.asm has already managed the work for it
