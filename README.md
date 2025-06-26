@@ -59,7 +59,3 @@ To start the OS with Bochs in debug mode:
 ```bash
 ./debug.sh
 ```
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for full details.
