@@ -61,7 +61,7 @@ That also means it is still intentionally limited:
 
 The current runtime stack is split like this:
 - `mbr`: tiny BIOS MBR that finds the active partition and loads the partition boot sector
-- `stage1`: FAT16 volume boot sector that loads `STAGE2.BIN`
+- `stage1`: tiny FAT16 volume boot sector that loads `stage2` from image-builder metadata
 - `stage2`: real-mode loader that reads FAT16, loads the kernel, prepares `BootInfo`, and enters protected mode
 - `block`: boot-disk sector I/O layer in the kernel
 - `fs`: filesystem-facing kernel API used by the shell
@@ -176,7 +176,7 @@ If QEMU is unavailable, the host-side checks still run.
 ```text
 .
 ├── src/boot/mbr/         # BIOS MBR
-├── src/boot/stage1/      # FAT16 partition boot sector
+├── src/boot/stage1/      # tiny partition boot sector for stage2 handoff
 ├── src/boot/stage2/      # FAT16 loader + protected-mode transition
 ├── src/common/           # Shared boot/kernel structures
 ├── src/kernel/           # Kernel, storage, filesystem, shell, program loader

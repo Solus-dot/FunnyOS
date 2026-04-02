@@ -28,6 +28,9 @@
 #define FAT16_DIRECTORY 0x10u
 #define FAT16_ARCHIVE 0x20u
 
+#define VBR_STAGE2_LBA_OFFSET 62u
+#define VBR_STAGE2_SECTOR_COUNT_OFFSET 66u
+
 typedef struct __attribute__((packed)) PartitionEntry {
     uint8_t status;
     uint8_t first_chs[3];
@@ -141,6 +144,11 @@ static uint32_t cluster_byte_offset(uint16_t cluster)
 {
     uint32_t partition_lba = DATA_START_SECTOR + (uint32_t)(cluster - 2u) * SECTORS_PER_CLUSTER;
     return partition_byte_offset(partition_lba);
+}
+
+static uint32_t cluster_to_partition_lba(uint16_t cluster)
+{
+    return DATA_START_SECTOR + (uint32_t)(cluster - 2u) * SECTORS_PER_CLUSTER;
 }
 
 static void fat16_set(uint16_t* fat, uint16_t cluster, uint16_t value)
@@ -286,6 +294,22 @@ static void write_vbr_and_metadata(uint8_t* image, const FileBlob* vbr_blob)
     memcpy(fat_secondary, fat_primary, SECTORS_PER_FAT * SECTOR_SIZE);
 }
 
+static void patch_stage2_boot_metadata(uint8_t* image, const Allocation* stage2_alloc)
+{
+    uint8_t* vbr = image + PARTITION_START_LBA * SECTOR_SIZE;
+    uint32_t stage2_lba;
+    uint16_t stage2_sector_count;
+
+    if (stage2_alloc->cluster_count == 0u)
+        fail("stage2 allocation missing");
+
+    stage2_lba = PARTITION_START_LBA + cluster_to_partition_lba(stage2_alloc->first_cluster);
+    stage2_sector_count = (uint16_t)((uint32_t)stage2_alloc->cluster_count * SECTORS_PER_CLUSTER);
+
+    memcpy(vbr + VBR_STAGE2_LBA_OFFSET, &stage2_lba, sizeof(stage2_lba));
+    memcpy(vbr + VBR_STAGE2_SECTOR_COUNT_OFFSET, &stage2_sector_count, sizeof(stage2_sector_count));
+}
+
 int main(int argc, char** argv)
 {
     uint8_t* image;
@@ -343,6 +367,7 @@ int main(int argc, char** argv)
     fat_secondary = (uint16_t*)(image + partition_byte_offset(FAT_START_SECTOR + SECTORS_PER_FAT));
 
     stage2_alloc = allocate_blob(image, fat_primary, &stage2_blob, &next_cluster, 1);
+    patch_stage2_boot_metadata(image, &stage2_alloc);
     kernel_alloc = allocate_blob(image, fat_primary, &kernel_blob, &next_cluster, 0);
     root_test_alloc = allocate_blob(image, fat_primary, &root_test_blob, &next_cluster, 0);
     mydir_alloc = allocate_blob(image, fat_primary, &(FileBlob){0}, &next_cluster, 1);
