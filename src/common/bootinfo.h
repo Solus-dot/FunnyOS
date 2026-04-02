@@ -7,14 +7,11 @@
 
 typedef struct BootInfo {
     uint32_t magic;
-    uint16_t boot_drive;
-    uint16_t boot_device_type;
-    uint32_t memory_map_addr;
-    uint32_t memory_map_entries;
-    uint32_t root_dir_snapshot_addr;
-    uint32_t root_dir_snapshot_count;
-    uint32_t demo_file_addr;
-    uint32_t demo_file_size;
+    uint8_t boot_drive;
+    uint8_t boot_partition_index;
+    uint16_t bytes_per_sector;
+    uint32_t partition_lba_start;
+    uint32_t partition_sector_count;
     uint16_t screen_columns;
     uint16_t screen_rows;
 } BootInfo;

@@ -10,6 +10,7 @@ CROSS_OBJCOPY := $(CROSS_PREFIX)objcopy
 BUILD_DIR := build
 SRC_DIR := src
 
+MBR_SRC := $(SRC_DIR)/boot/mbr/mbr.asm
 STAGE1_SRC := $(SRC_DIR)/boot/stage1/boot.asm
 STAGE2_SRC := $(SRC_DIR)/boot/stage2/stage2.asm
 KERNEL_LD_SCRIPT := $(SRC_DIR)/kernel/linker.ld
@@ -32,16 +33,16 @@ KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -Wall -We
 
 all: image
 
-image: check-build-tools $(BUILD_DIR)/main_floppy.img
+image: check-build-tools $(BUILD_DIR)/funnyos-disk.img
 
-run: check-run-tools $(BUILD_DIR)/main_floppy.img
-	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/main_floppy.img,if=floppy -serial stdio
+run: check-run-tools $(BUILD_DIR)/funnyos-disk.img
+	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/funnyos-disk.img,if=ide -serial stdio
 
-debug: check-run-tools $(BUILD_DIR)/main_floppy.img
-	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/main_floppy.img,if=floppy -serial stdio -monitor none -s -S
+debug: check-run-tools $(BUILD_DIR)/funnyos-disk.img
+	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/funnyos-disk.img,if=ide -serial stdio -monitor none -s -S
 
 test: image $(FAT_TOOL)
-	sh tests/smoke.sh "$(BUILD_DIR)/main_floppy.img" "$(QEMU)" "$(IMG_TOOL)" "$(FAT_TOOL)" "$(BUILD_DIR)/stage1.bin" "$(BUILD_DIR)/stage2.bin" "$(BUILD_DIR)/kernel.bin" "$(ROOT_TEST_FILE)" "$(DEMO_TEST_FILE)"
+	sh tests/smoke.sh "$(BUILD_DIR)/funnyos-disk.img" "$(QEMU)" "$(IMG_TOOL)" "$(FAT_TOOL)" "$(BUILD_DIR)/mbr.bin" "$(BUILD_DIR)/stage1.bin" "$(BUILD_DIR)/stage2.bin" "$(BUILD_DIR)/kernel.bin" "$(ROOT_TEST_FILE)" "$(DEMO_TEST_FILE)"
 
 check-build-tools:
 	@command -v $(ASM) >/dev/null || { echo "Missing tool: $(ASM)"; exit 1; }
@@ -54,8 +55,11 @@ check-build-tools:
 check-run-tools: check-build-tools
 	@command -v $(QEMU) >/dev/null || { echo "Missing tool: $(QEMU)"; exit 1; }
 
-$(BUILD_DIR)/main_floppy.img: $(BUILD_DIR)/stage1.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin $(IMG_TOOL) $(ROOT_TEST_FILE) $(DEMO_TEST_FILE)
-	$(IMG_TOOL) $@ $(BUILD_DIR)/stage1.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin $(ROOT_TEST_FILE) $(DEMO_TEST_FILE)
+$(BUILD_DIR)/funnyos-disk.img: $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage1.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin $(IMG_TOOL) $(ROOT_TEST_FILE) $(DEMO_TEST_FILE)
+	$(IMG_TOOL) $@ $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage1.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin $(ROOT_TEST_FILE) $(DEMO_TEST_FILE)
+
+$(BUILD_DIR)/mbr.bin: $(MBR_SRC) | $(BUILD_DIR)
+	$(ASM) -f bin $< -o $@
 
 $(BUILD_DIR)/stage1.bin: $(STAGE1_SRC) | $(BUILD_DIR)
 	$(ASM) -f bin $< -o $@

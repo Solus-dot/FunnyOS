@@ -3,52 +3,56 @@
 
 %define ENDL 0x0D, 0x0A
 
-%define BOOT_SECTOR_BUFFER  0x05000
-%define FAT_BUFFER          0x06000
-%define ROOT_DIR_BUFFER     0x08000
-%define SUBDIR_BUFFER       0x0A000
-%define DEMO_FILE_BUFFER    0x0B000
-%define BOOTINFO_ADDR       0x0C000
-%define STAGE2_LOAD_ADDR    0x00020000
-%define KERNEL_TEMP_ADDR    0x30000
+%define HANDOFF_ADDR        0x0600
+%define BOOTINFO_ADDR       0x0900
+%define BOOT_SECTOR_BUFFER  0x08000
+%define FAT_BUFFER          0x10000
+%define ROOT_DIR_BUFFER     0x20000
+%define SUBDIR_BUFFER       0x24000
+%define STAGE2_LOAD_ADDR    0x00030000
+%define KERNEL_TEMP_ADDR    0x00050000
+%define DEMO_FILE_BUFFER    0x00070000
 %define KERNEL_LOAD_ADDR    0x00100000
 %define RM_STACK_SEGMENT    0x7000
 %define PM_STACK_TOP        0x00090000
 
-%define BOOTINFO_MAGIC                  0x534F4E46
-%define BOOTINFO_MAGIC_OFF              0
-%define BOOTINFO_BOOT_DRIVE_OFF         4
-%define BOOTINFO_BOOT_DEVICE_TYPE_OFF   6
-%define BOOTINFO_MEMORY_MAP_ADDR_OFF    8
-%define BOOTINFO_MEMORY_MAP_COUNT_OFF   12
-%define BOOTINFO_ROOT_ADDR_OFF          16
-%define BOOTINFO_ROOT_COUNT_OFF         20
-%define BOOTINFO_DEMO_ADDR_OFF          24
-%define BOOTINFO_DEMO_SIZE_OFF          28
-%define BOOTINFO_SCREEN_COLS_OFF        32
-%define BOOTINFO_SCREEN_ROWS_OFF        34
+%define BOOTINFO_MAGIC                   0x534F4E46
+%define BOOTINFO_MAGIC_OFF               0
+%define BOOTINFO_BOOT_DRIVE_OFF          4
+%define BOOTINFO_PARTITION_INDEX_OFF     5
+%define BOOTINFO_BYTES_PER_SECTOR_OFF    6
+%define BOOTINFO_PARTITION_LBA_OFF       8
+%define BOOTINFO_PARTITION_COUNT_OFF     12
+%define BOOTINFO_SCREEN_COLS_OFF         16
+%define BOOTINFO_SCREEN_ROWS_OFF         18
 
-%define DIR_ATTR_DIRECTORY 0x10
-%define DIR_ATTR_VOLUME_ID 0x08
-%define DIR_ATTR_LFN       0x0F
+%define HANDOFF_BOOT_DRIVE_OFF           0
+%define HANDOFF_PARTITION_INDEX_OFF      1
+%define HANDOFF_PARTITION_LBA_OFF        4
+%define HANDOFF_PARTITION_COUNT_OFF      8
 
-%define BPB_BYTES_PER_SECTOR_OFF     11
-%define BPB_SECTORS_PER_CLUSTER_OFF  13
-%define BPB_RESERVED_SECTORS_OFF     14
-%define BPB_FAT_COUNT_OFF            16
-%define BPB_DIR_ENTRY_COUNT_OFF      17
-%define BPB_TOTAL_SECTORS_OFF        19
-%define BPB_SECTORS_PER_FAT_OFF      22
-%define BPB_SECTORS_PER_TRACK_OFF    24
-%define BPB_HEADS_OFF                26
+%define DIR_ATTR_DIRECTORY               0x10
+%define DIR_ATTR_VOLUME_ID               0x08
+%define DIR_ATTR_LFN                     0x0F
 
-%define DIR_NAME_OFF             0
-%define DIR_ATTRIBUTES_OFF       11
-%define DIR_FIRST_CLUSTER_OFF    26
-%define DIR_FILE_SIZE_OFF        28
+%define BPB_BYTES_PER_SECTOR_OFF         11
+%define BPB_SECTORS_PER_CLUSTER_OFF      13
+%define BPB_RESERVED_SECTORS_OFF         14
+%define BPB_FAT_COUNT_OFF                16
+%define BPB_DIR_ENTRY_COUNT_OFF          17
+%define BPB_TOTAL_SECTORS16_OFF          19
+%define BPB_SECTORS_PER_FAT_OFF          22
+%define BPB_HIDDEN_SECTORS_OFF           28
+%define BPB_TOTAL_SECTORS32_OFF          32
+
+%define DIR_NAME_OFF                     0
+%define DIR_ATTRIBUTES_OFF               11
+%define DIR_FIRST_CLUSTER_OFF            26
+%define DIR_FILE_SIZE_OFF                28
 
 start:
     cli
+    cld
     mov ax, cs
     mov ds, ax
     mov es, ax
@@ -58,6 +62,14 @@ start:
     sti
 
     mov [boot_drive], dl
+    xor ax, ax
+    mov es, ax
+    mov al, [es:HANDOFF_ADDR + HANDOFF_PARTITION_INDEX_OFF]
+    mov [boot_partition_index], al
+    mov eax, [es:HANDOFF_ADDR + HANDOFF_PARTITION_LBA_OFF]
+    mov [partition_lba_start], eax
+    mov eax, [es:HANDOFF_ADDR + HANDOFF_PARTITION_COUNT_OFF]
+    mov [partition_sector_count], eax
 
     call serial_init
     mov si, msg_stage2
@@ -101,7 +113,7 @@ start:
     jz mydir_not_found
 
     mov si, found_entry
-    call load_directory_cluster
+    call load_directory_from_entry
     jc mydir_not_found
 
     mov si, test_file_name
@@ -167,60 +179,92 @@ fatal16:
     jmp .halt
 
 read_boot_sector:
-    clc
+    mov eax, [partition_lba_start]
+    mov edi, BOOT_SECTOR_BUFFER
+    mov cx, 1
+    call read_sector_count_to_phys
     ret
 
 parse_boot_sector:
-    mov ax, 512
-    mov [bytes_per_sector], ax
-    mov al, 1
-    mov [sectors_per_cluster], al
-    mov ax, 1
-    mov [reserved_sectors], ax
-    mov al, 2
-    mov [fat_count], al
-    mov ax, 224
-    mov [dir_entry_count], ax
-    mov ax, 9
-    mov [sectors_per_fat], ax
-    mov ax, 18
-    mov [sectors_per_track], ax
-    mov ax, 2
-    mov [heads], ax
+    mov bx, BOOT_SECTOR_BUFFER >> 4
+    mov es, bx
 
+    mov ax, [es:BPB_BYTES_PER_SECTOR_OFF]
+    mov [bytes_per_sector], ax
+
+    mov al, [es:BPB_SECTORS_PER_CLUSTER_OFF]
+    mov [sectors_per_cluster], al
+
+    mov ax, [es:BPB_RESERVED_SECTORS_OFF]
+    mov [reserved_sectors], ax
+
+    mov al, [es:BPB_FAT_COUNT_OFF]
+    mov [fat_count], al
+
+    mov ax, [es:BPB_DIR_ENTRY_COUNT_OFF]
+    mov [dir_entry_count], ax
+
+    mov ax, [es:BPB_SECTORS_PER_FAT_OFF]
+    mov [sectors_per_fat], ax
+
+    mov eax, [es:BPB_HIDDEN_SECTORS_OFF]
+    mov [hidden_sectors], eax
+
+    mov ax, [es:BPB_TOTAL_SECTORS16_OFF]
+    test ax, ax
+    jz .use_total32
+    movzx eax, ax
+    jmp .store_total
+
+.use_total32:
+    mov eax, [es:BPB_TOTAL_SECTORS32_OFF]
+
+.store_total:
+    mov [total_sectors], eax
+
+    xor eax, eax
     mov ax, [dir_entry_count]
-    shl ax, 5
-    xor dx, dx
-    div word [bytes_per_sector]
-    test dx, dx
+    shl eax, 5
+    xor edx, edx
+    movzx ecx, word [bytes_per_sector]
+    div ecx
+    test edx, edx
     jz .root_ready
-    inc ax
+    inc eax
 
 .root_ready:
-    mov [root_dir_sectors], ax
+    mov [root_dir_sectors], eax
 
-    mov ax, [sectors_per_fat]
-    xor bx, bx
-    mov bl, [fat_count]
-    mul bx
-    add ax, [reserved_sectors]
-    mov [root_dir_lba], ax
-    add ax, [root_dir_sectors]
-    mov [data_lba], ax
+    movzx eax, word [sectors_per_fat]
+    movzx ecx, byte [fat_count]
+    imul eax, ecx
+    movzx edx, word [reserved_sectors]
+    add eax, edx
+    mov [root_dir_lba_rel], eax
 
+    mov edx, [root_dir_sectors]
+    add eax, edx
+    mov [data_lba_rel], eax
+
+    movzx eax, byte [sectors_per_cluster]
+    movzx ecx, word [bytes_per_sector]
+    imul eax, ecx
+    mov [cluster_size_bytes], eax
     ret
 
 read_root_directory:
-    xor eax, eax
-    mov ax, [root_dir_lba]
+    mov eax, [partition_lba_start]
+    add eax, [root_dir_lba_rel]
     mov edi, ROOT_DIR_BUFFER
     mov cx, [root_dir_sectors]
     call read_sector_count_to_phys
     ret
 
 read_fat_table:
-    xor eax, eax
-    mov ax, [reserved_sectors]
+    mov eax, [partition_lba_start]
+    xor edx, edx
+    mov dx, [reserved_sectors]
+    add eax, edx
     mov edi, FAT_BUFFER
     mov cx, [sectors_per_fat]
     call read_sector_count_to_phys
@@ -232,16 +276,22 @@ find_root_entry:
     jmp find_entry_in_segment
 
 find_subdir_entry:
-    xor bx, bx
-    mov bl, [sectors_per_cluster]
-    shl bx, 4
+    mov bx, [subdir_entry_count]
     mov dx, SUBDIR_BUFFER >> 4
 
 find_entry_in_segment:
-    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     push bp
+    push es
+
     mov bp, di
-    mov es, dx
+    mov ax, dx
+    mov es, ax
     xor dx, dx
     xor cx, cx
 
@@ -253,92 +303,144 @@ find_entry_in_segment:
     mov al, [es:di]
     cmp al, 0
     je .not_found
-
     cmp al, 0xE5
     je .advance
 
-    push cx
-    push si
-    mov di, dx
-    mov cx, 11
-    repe cmpsb
-    pop si
-    pop cx
-    je .found
-    jmp .advance
+    mov al, [es:di + DIR_ATTRIBUTES_OFF]
+    cmp al, DIR_ATTR_LFN
+    je .advance
 
-.found:
-    push ds
-    mov ax, es
-    mov ds, ax
-    pop es
-    mov si, dx
-    mov di, bp
-    mov cx, 16
-    rep movsw
-    mov ax, cs
-    mov ds, ax
-    pop es
-    pop bp
-    clc
-    ret
+    push cx
+    push dx
+    push si
+    mov cx, 11
+    mov di, dx
+
+.compare_loop:
+    mov al, [si]
+    cmp al, [es:di]
+    jne .compare_fail
+    inc si
+    inc di
+    loop .compare_loop
+
+    pop si
+    pop dx
+    pop cx
+    jmp .found
+
+.compare_fail:
+    pop si
+    pop dx
+    pop cx
 
 .advance:
     add dx, 32
     inc cx
     jmp .next_entry
 
+.found:
+    mov si, dx
+    mov di, bp
+    mov cx, 16
+.copy_entry:
+    mov ax, [es:si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    loop .copy_entry
+
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
 .not_found:
     pop es
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     stc
     ret
 
-load_directory_cluster:
-    push eax
-    mov ax, [si + DIR_FIRST_CLUSTER_OFF]
-    call cluster_to_lba
+load_directory_from_entry:
+    mov bx, [si + DIR_FIRST_CLUSTER_OFF]
     mov edi, SUBDIR_BUFFER
-    xor cx, cx
-    mov cl, [sectors_per_cluster]
-    call read_sector_count_to_phys
-    pop eax
+    call load_cluster_chain_to_buffer
+    jc .fail
+    shr eax, 5
+    mov [subdir_entry_count], ax
+    clc
+    ret
+
+.fail:
+    stc
     ret
 
 load_file_from_entry:
+    mov eax, [si + DIR_FILE_SIZE_OFF]
+    mov [current_file_size], eax
+    mov bx, [si + DIR_FIRST_CLUSTER_OFF]
+    test eax, eax
+    jnz .load
+    clc
+    ret
+
+.load:
+    call load_cluster_chain_to_buffer
+    jc .fail
+    mov eax, [current_file_size]
+    clc
+    ret
+
+.fail:
+    stc
+    ret
+
+load_cluster_chain_to_buffer:
     push ebx
     push ecx
     push edx
     push esi
 
-    mov eax, [si + DIR_FILE_SIZE_OFF]
-    mov [current_file_size], eax
-    mov bx, [si + DIR_FIRST_CLUSTER_OFF]
     xor edx, edx
 
 .cluster_loop:
-    cmp bx, 0x0FF8
+    cmp bx, 2
+    jb .done
+    cmp bx, 0xFFF8
     jae .done
 
     mov ax, bx
-    call cluster_to_lba
+    call cluster_to_abs_lba
     xor cx, cx
     mov cl, [sectors_per_cluster]
+    push bx
     call read_sector_count_to_phys
+    pop bx
     jc .fail
 
-    movzx eax, byte [sectors_per_cluster]
-    movzx ecx, word [bytes_per_sector]
-    mul ecx
+    mov eax, [cluster_size_bytes]
     add edi, eax
+    add edx, eax
 
     mov ax, bx
-    call fat_next_cluster
+    call fat16_next_cluster
     mov bx, ax
     jmp .cluster_loop
 
 .done:
-    mov eax, [current_file_size]
+    mov eax, edx
     clc
     jmp .out
 
@@ -352,43 +454,29 @@ load_file_from_entry:
     pop ebx
     ret
 
-cluster_to_lba:
-    sub ax, 2
-    xor cx, cx
-    mov cl, [sectors_per_cluster]
-    mul cx
-    add ax, [data_lba]
+cluster_to_abs_lba:
+    movzx eax, ax
+    sub eax, 2
+    movzx ecx, byte [sectors_per_cluster]
+    imul eax, ecx
+    add eax, [data_lba_rel]
+    add eax, [partition_lba_start]
     ret
 
-fat_next_cluster:
+fat16_next_cluster:
     push bx
-    push dx
     push es
-    mov bx, ax
-    mov cx, 3
-    mul cx
-    mov cx, 2
-    div cx
     mov bx, FAT_BUFFER >> 4
     mov es, bx
     mov bx, ax
+    shl bx, 1
     mov ax, [es:bx]
-    test dx, dx
-    jz .even
-    shr ax, 4
-    jmp .ready
-
-.even:
-    and ax, 0x0FFF
-
-.ready:
     pop es
-    pop dx
     pop bx
     ret
 
 read_sector_count_to_phys:
-    push ax
+    push eax
     push bx
     push cx
     push dx
@@ -396,13 +484,13 @@ read_sector_count_to_phys:
 .sector_loop:
     test cx, cx
     jz .done
-    push ax
+    push eax
     push cx
     call read_sector_to_phys
     pop cx
-    pop ax
+    pop eax
     jc .fail
-    inc ax
+    inc eax
     movzx edx, word [bytes_per_sector]
     add edi, edx
     dec cx
@@ -419,43 +507,28 @@ read_sector_count_to_phys:
     pop dx
     pop cx
     pop bx
-    pop ax
+    pop eax
     ret
 
 read_sector_to_phys:
     push bx
-    push cx
     push dx
     push es
 
     call phys_to_esbx
-    mov cl, 1
+    mov word [disk_packet.count], 1
+    mov [disk_packet.offset], bx
+    mov [disk_packet.segment], es
+    mov [disk_packet.lba_low], eax
+    mov dword [disk_packet.lba_high], 0
     mov dl, [boot_drive]
-    call disk_read
+    mov si, disk_packet
+    mov ah, 0x42
+    int 0x13
 
     pop es
     pop dx
-    pop cx
     pop bx
-    ret
-
-lba_to_chs:
-    push ax
-
-    xor dx, dx
-    div word [sectors_per_track]
-    inc dx
-    mov cx, dx
-
-    xor dx, dx
-    div word [heads]
-    mov dh, dl
-    mov ch, al
-    shl ah, 6
-    or cl, ah
-
-    pop ax
-    mov dl, [boot_drive]
     ret
 
 phys_to_esbx:
@@ -466,55 +539,6 @@ phys_to_esbx:
     shr eax, 4
     mov es, ax
     pop eax
-    ret
-
-disk_read:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-
-    push cx
-    call lba_to_chs
-    pop ax
-
-    mov ah, 0x02
-    mov di, 3
-
-.retry:
-    pusha
-    stc
-    int 0x13
-    jnc .success
-
-    popa
-    call disk_reset
-    dec di
-    test di, di
-    jnz .retry
-    stc
-    jmp .done
-
-.success:
-    popa
-    clc
-
-.done:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-disk_reset:
-    push ax
-    mov ah, 0
-    mov dl, [boot_drive]
-    stc
-    int 0x13
-    pop ax
     ret
 
 serial_init:
@@ -715,29 +739,31 @@ print_root_listing:
     ret
 
 print_demo_file:
-    push ax
-    push cx
+    push eax
+    push ecx
     push di
     push es
 
     mov ax, DEMO_FILE_BUFFER >> 4
     mov es, ax
     xor di, di
-    mov cx, [demo_file_size]
-    jcxz .done
+    mov ecx, [demo_file_size]
+    test ecx, ecx
+    jz .done
 
 .next_char:
     mov al, [es:di]
     call putc16
     inc di
-    loop .next_char
+    dec ecx
+    jnz .next_char
 
 .done:
     call newline16
     pop es
     pop di
-    pop cx
-    pop ax
+    pop ecx
+    pop eax
     ret
 
 print_boot_demo:
@@ -782,18 +808,16 @@ protected_mode_entry:
     rep movsd
 
     mov dword [BOOTINFO_ADDR + BOOTINFO_MAGIC_OFF], BOOTINFO_MAGIC
-    movzx eax, byte [STAGE2_LOAD_ADDR + boot_drive]
-    mov word [BOOTINFO_ADDR + BOOTINFO_BOOT_DRIVE_OFF], ax
-    movzx eax, byte [STAGE2_LOAD_ADDR + boot_device_type]
-    mov word [BOOTINFO_ADDR + BOOTINFO_BOOT_DEVICE_TYPE_OFF], ax
-    mov dword [BOOTINFO_ADDR + BOOTINFO_MEMORY_MAP_ADDR_OFF], 0
-    mov dword [BOOTINFO_ADDR + BOOTINFO_MEMORY_MAP_COUNT_OFF], 0
-    mov dword [BOOTINFO_ADDR + BOOTINFO_ROOT_ADDR_OFF], ROOT_DIR_BUFFER
-    movzx eax, word [STAGE2_LOAD_ADDR + dir_entry_count]
-    mov dword [BOOTINFO_ADDR + BOOTINFO_ROOT_COUNT_OFF], eax
-    mov dword [BOOTINFO_ADDR + BOOTINFO_DEMO_ADDR_OFF], DEMO_FILE_BUFFER
-    mov eax, [STAGE2_LOAD_ADDR + demo_file_size]
-    mov dword [BOOTINFO_ADDR + BOOTINFO_DEMO_SIZE_OFF], eax
+    mov al, [STAGE2_LOAD_ADDR + boot_drive]
+    mov [BOOTINFO_ADDR + BOOTINFO_BOOT_DRIVE_OFF], al
+    mov al, [STAGE2_LOAD_ADDR + boot_partition_index]
+    mov [BOOTINFO_ADDR + BOOTINFO_PARTITION_INDEX_OFF], al
+    mov ax, [STAGE2_LOAD_ADDR + bytes_per_sector]
+    mov [BOOTINFO_ADDR + BOOTINFO_BYTES_PER_SECTOR_OFF], ax
+    mov eax, [STAGE2_LOAD_ADDR + partition_lba_start]
+    mov [BOOTINFO_ADDR + BOOTINFO_PARTITION_LBA_OFF], eax
+    mov eax, [STAGE2_LOAD_ADDR + partition_sector_count]
+    mov [BOOTINFO_ADDR + BOOTINFO_PARTITION_COUNT_OFF], eax
     mov word [BOOTINFO_ADDR + BOOTINFO_SCREEN_COLS_OFF], 80
     mov word [BOOTINFO_ADDR + BOOTINFO_SCREEN_ROWS_OFF], 25
 
@@ -818,7 +842,7 @@ DATA_SEL equ 0x10
 msg_stage2:          db 'Stage2: starting', ENDL, 0
 msg_boot_ok:         db 'Stage2: boot sector loaded', ENDL, 0
 msg_parse_ok:        db 'Stage2: BPB parsed', ENDL, 0
-msg_root:            db 'Stage2: loading FAT12 metadata', ENDL, 0
+msg_root:            db 'Stage2: loading FAT16 metadata', ENDL, 0
 msg_pm:              db 'Stage2: entering protected mode', ENDL, 0
 msg_boot_error:      db 'Stage2: boot sector read failed', ENDL, 0
 msg_root_error:      db 'Stage2: root directory read failed', ENDL, 0
@@ -839,21 +863,39 @@ mydir_name:          db 'MYDIR      '
 test_file_name:      db 'TEST    TXT'
 
 boot_drive:          db 0
-boot_device_type:    db 0
+boot_partition_index: db 0
 fat_count:           db 0
 sectors_per_cluster: db 0
 bytes_per_sector:    dw 0
 reserved_sectors:    dw 0
 dir_entry_count:     dw 0
 sectors_per_fat:     dw 0
-sectors_per_track:   dw 0
-heads:               dw 0
-root_dir_sectors:    dw 0
-root_dir_lba:        dw 0
-data_lba:            dw 0
+subdir_entry_count:  dw 0
 
+hidden_sectors:      dd 0
+total_sectors:       dd 0
+partition_lba_start: dd 0
+partition_sector_count: dd 0
+root_dir_sectors:    dd 0
+root_dir_lba_rel:    dd 0
+data_lba_rel:        dd 0
+cluster_size_bytes:  dd 0
 kernel_size:         dd 0
 demo_file_size:      dd 0
 current_file_size:   dd 0
+
+disk_packet:
+    db 0x10
+    db 0
+.count:
+    dw 0
+.offset:
+    dw 0
+.segment:
+    dw 0
+.lba_low:
+    dd 0
+.lba_high:
+    dd 0
 
 found_entry:         times 32 db 0

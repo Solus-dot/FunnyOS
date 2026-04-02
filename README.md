@@ -1,20 +1,22 @@
 # FunnyOS
 
-FunnyOS is a small x86 BIOS-booted operating system project based on Nanobyte's tutorial series, migrated toward a Watcom-free toolchain and a QEMU-first workflow.
+FunnyOS is a small x86 BIOS-booted operating system project based on Nanobyte's tutorial series, migrated onto a Watcom-free GNU toolchain with QEMU as the default runtime.
 
-The current runtime path is:
-- `stage1`: 16-bit FAT12 boot sector in NASM
-- `stage2`: NASM-only real-mode loader that reads FAT12, loads `KERNEL.BIN`, prepares boot info, and switches to 32-bit protected mode
-- `kernel`: freestanding 32-bit C/ASM kernel built with a GNU cross-toolchain
+The current boot chain is:
+- `mbr`: a tiny NASM MBR that finds the active partition and loads the partition boot sector
+- `stage1`: a NASM FAT16 partition boot sector that loads `STAGE2.BIN`
+- `stage2`: a NASM real-mode loader that reads FAT16, loads `KERNEL.BIN`, prepares `BootInfo`, and switches to 32-bit protected mode
+- `kernel`: a minimal freestanding 32-bit C/ASM kernel built with a GNU cross-toolchain
 
 ## Current features
 
-- Boots from a generated FAT12 floppy image
-- Loads `STAGE2.BIN` and `KERNEL.BIN` from the root directory
-- Hands a `BootInfo` structure from the loader to the kernel
-- Prints the preserved demo output over VGA text mode and COM1 serial during loader bring-up
+- Boots from a generated hard-disk image, not a floppy image
+- Uses `MBR + one active FAT16 partition`
+- Loads `STAGE2.BIN` and `KERNEL.BIN` from the FAT16 root directory
+- Loads `MYDIR/TEST.TXT` from the FAT16 filesystem during stage 2
+- Hands a minimal `BootInfo` structure from the loader to the kernel
 - Preserves the current demo behavior:
-  - prints a boot banner
+  - prints the stage 2 boot banner
   - lists root directory entries
   - reads and displays `MYDIR/TEST.TXT`
 
@@ -30,8 +32,9 @@ Required tools:
 - host C compiler for repo tools:
   - `gcc` or compatible `cc`
 
-The default build no longer depends on:
+The default build does not depend on:
 - Open Watcom
+- Bochs
 - `mkfs.fat`
 - `mcopy`
 
@@ -39,12 +42,13 @@ The default build no longer depends on:
 
 ```text
 .
-├── src/boot/stage1/      # BIOS boot sector
-├── src/boot/stage2/      # FAT12 loader + protected-mode transition
+├── src/boot/mbr/         # BIOS MBR
+├── src/boot/stage1/      # FAT16 partition boot sector
+├── src/boot/stage2/      # FAT16 loader + protected-mode transition
 ├── src/common/           # Minimal shared boot/kernel structures
 ├── src/kernel/           # Minimal protected-mode handoff kernel
-├── tools/imgbuild/       # Repo-owned FAT12 image builder
-├── tools/fat/            # Host FAT12 inspection tool
+├── tools/imgbuild/       # Repo-owned hard-disk/FAT16 image builder
+├── tools/fat/            # Host FAT16 inspection tool
 ├── tests/                # Smoke tests
 ├── run.sh
 ├── debug.sh
@@ -60,11 +64,12 @@ make
 ```
 
 This produces:
+- `build/mbr.bin`
 - `build/stage1.bin`
 - `build/stage2.bin`
 - `build/kernel.elf`
 - `build/kernel.bin`
-- `build/main_floppy.img`
+- `build/funnyos-disk.img`
 
 If the cross-toolchain or assembler is missing, `make` fails fast with a tool-specific error.
 
@@ -80,7 +85,7 @@ or:
 ./run.sh
 ```
 
-The default run path boots the floppy image in QEMU and forwards COM1 serial output to the terminal.
+The default run path boots the hard-disk image in QEMU as an IDE disk and forwards COM1 serial output to the terminal.
 
 ## Debug
 
@@ -103,17 +108,17 @@ make test
 ```
 
 The smoke test covers:
-- host-side FAT12 image inspection with the repo tool
+- host-side FAT16 image inspection with the repo tool
 - normal QEMU boot output
 - missing-kernel error handling
 - missing-demo-file error handling
 
-If QEMU is not installed, the test script still runs the host-side FAT12 validation and reports that QEMU checks were skipped.
+If QEMU is not installed, the test script still runs the host-side FAT16 validation and reports that QEMU checks were skipped.
 
 ## Notes
 
+- The default disk image is a fixed `64 MiB` raw image with a single active FAT16 partition starting at LBA `2048`.
 - The kernel is linked for `0x00100000` and entered in 32-bit protected mode without paging.
-- The initial `BootInfo` contract leaves memory-map fields at zero; later kernel work can extend that handoff.
-- The current demo text is emitted by `stage2` immediately before the protected-mode jump while the kernel-side console path is being hardened.
+- `BootInfo` currently carries boot drive, partition, sector-size, and screen metadata only.
+- The current demo text is still emitted by `stage2`; the kernel is intentionally minimal in this milestone.
 - Serial output exists mainly to make QEMU smoke tests deterministic.
-- Most of the logic now lives in `stage2`; the kernel is intentionally tiny so the codebase stays easy to re-learn.

@@ -4,17 +4,38 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define IMAGE_SIZE (1474560u)
+#define IMAGE_SIZE_BYTES (64u * 1024u * 1024u)
 #define SECTOR_SIZE 512u
-#define TOTAL_SECTORS 2880u
+#define TOTAL_SECTORS (IMAGE_SIZE_BYTES / SECTOR_SIZE)
+
+#define PARTITION_START_LBA 2048u
+#define PARTITION_SECTORS (TOTAL_SECTORS - PARTITION_START_LBA)
+#define PARTITION_TYPE_FAT16_LBA 0x0Eu
+
 #define RESERVED_SECTORS 1u
 #define FAT_COUNT 2u
-#define SECTORS_PER_FAT 9u
-#define ROOT_ENTRY_COUNT 224u
-#define ROOT_DIR_SECTORS 14u
-#define ROOT_DIR_START_SECTOR (RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT)
+#define ROOT_ENTRY_COUNT 512u
+#define ROOT_DIR_SECTORS ((ROOT_ENTRY_COUNT * 32u) / SECTOR_SIZE)
+#define SECTORS_PER_CLUSTER 4u
+#define SECTORS_PER_FAT 126u
+
+#define FAT_START_SECTOR RESERVED_SECTORS
+#define ROOT_DIR_START_SECTOR (FAT_START_SECTOR + FAT_COUNT * SECTORS_PER_FAT)
 #define DATA_START_SECTOR (ROOT_DIR_START_SECTOR + ROOT_DIR_SECTORS)
-#define CLUSTER_END 0x0ff8u
+
+#define FAT16_END_OF_CHAIN 0xFFFFu
+#define FAT16_CLUSTER_FREE 0x0000u
+#define FAT16_DIRECTORY 0x10u
+#define FAT16_ARCHIVE 0x20u
+
+typedef struct __attribute__((packed)) PartitionEntry {
+    uint8_t status;
+    uint8_t first_chs[3];
+    uint8_t type;
+    uint8_t last_chs[3];
+    uint32_t first_lba;
+    uint32_t sector_count;
+} PartitionEntry;
 
 typedef struct __attribute__((packed)) DirectoryEntry {
     uint8_t name[11];
@@ -68,7 +89,7 @@ static FileBlob read_file_blob(const char* path)
 
     size = ftell(fp);
     if (size < 0)
-        fail("failed to read file size");
+        fail("failed to determine file size");
 
     if (fseek(fp, 0, SEEK_SET) != 0)
         fail("failed to rewind file");
@@ -80,7 +101,7 @@ static FileBlob read_file_blob(const char* path)
             fail("out of memory");
 
         if (fread(blob.data, 1, blob.size, fp) != blob.size)
-            fail("failed to read file contents");
+            fail("failed to read file");
     }
 
     fclose(fp);
@@ -94,32 +115,29 @@ static void free_blob(FileBlob* blob)
     blob->size = 0;
 }
 
-static void fat12_set(uint8_t* fat, uint16_t cluster, uint16_t value)
+static uint32_t partition_byte_offset(uint32_t partition_lba)
 {
-    uint32_t index = (uint32_t)cluster * 3u / 2u;
-
-    if ((cluster & 1u) == 0) {
-        fat[index] = (uint8_t)(value & 0xffu);
-        fat[index + 1] = (uint8_t)((fat[index + 1] & 0xf0u) | ((value >> 8) & 0x0fu));
-    } else {
-        fat[index] = (uint8_t)((fat[index] & 0x0fu) | ((value << 4) & 0xf0u));
-        fat[index + 1] = (uint8_t)((value >> 4) & 0xffu);
-    }
+    return (PARTITION_START_LBA + partition_lba) * SECTOR_SIZE;
 }
 
-static uint32_t cluster_offset(uint16_t cluster)
+static uint32_t cluster_byte_offset(uint16_t cluster)
 {
-    uint32_t sector = DATA_START_SECTOR + (uint32_t)(cluster - 2u);
-    return sector * SECTOR_SIZE;
+    uint32_t partition_lba = DATA_START_SECTOR + (uint32_t)(cluster - 2u) * SECTORS_PER_CLUSTER;
+    return partition_byte_offset(partition_lba);
 }
 
-static Allocation allocate_blob(uint8_t* image, uint8_t* fat, const FileBlob* blob, uint16_t* next_cluster, uint16_t min_clusters)
+static void fat16_set(uint16_t* fat, uint16_t cluster, uint16_t value)
+{
+    fat[cluster] = value;
+}
+
+static Allocation allocate_blob(uint8_t* image, uint16_t* fat, const FileBlob* blob, uint16_t* next_cluster, uint16_t min_clusters)
 {
     Allocation alloc = {0};
 
     alloc.cluster_count = min_clusters;
     if (blob->size != 0) {
-        uint16_t needed = (uint16_t)((blob->size + SECTOR_SIZE - 1u) / SECTOR_SIZE);
+        uint16_t needed = (uint16_t)((blob->size + (SECTOR_SIZE * SECTORS_PER_CLUSTER) - 1u) / (SECTOR_SIZE * SECTORS_PER_CLUSTER));
         if (needed > alloc.cluster_count)
             alloc.cluster_count = needed;
     }
@@ -132,22 +150,26 @@ static Allocation allocate_blob(uint8_t* image, uint8_t* fat, const FileBlob* bl
 
     for (uint16_t i = 0; i < alloc.cluster_count; ++i) {
         uint16_t cluster = (uint16_t)(alloc.first_cluster + i);
-        uint16_t next = (i + 1u == alloc.cluster_count) ? 0x0fffu : (uint16_t)(cluster + 1u);
+        uint16_t next = (i + 1u == alloc.cluster_count) ? FAT16_END_OF_CHAIN : (uint16_t)(cluster + 1u);
+        uint32_t offset = cluster_byte_offset(cluster);
 
-        fat12_set(fat, cluster, next);
+        if (offset + (SECTOR_SIZE * SECTORS_PER_CLUSTER) > IMAGE_SIZE_BYTES)
+            fail("image out of data clusters");
 
-        if (cluster_offset(cluster) + SECTOR_SIZE > IMAGE_SIZE)
-            fail("image is out of data clusters");
-
-        memset(image + cluster_offset(cluster), 0, SECTOR_SIZE);
+        fat16_set(fat, cluster, next);
+        memset(image + offset, 0, SECTOR_SIZE * SECTORS_PER_CLUSTER);
     }
 
     if (blob->size != 0) {
         uint32_t written = 0;
         for (uint16_t i = 0; i < alloc.cluster_count && written < blob->size; ++i) {
-            uint32_t offset = cluster_offset((uint16_t)(alloc.first_cluster + i));
-            uint32_t remaining = blob->size - written;
-            uint32_t chunk = remaining > SECTOR_SIZE ? SECTOR_SIZE : remaining;
+            uint32_t offset = cluster_byte_offset((uint16_t)(alloc.first_cluster + i));
+            uint32_t chunk = blob->size - written;
+            uint32_t cluster_size = SECTOR_SIZE * SECTORS_PER_CLUSTER;
+
+            if (chunk > cluster_size)
+                chunk = cluster_size;
+
             memcpy(image + offset, blob->data + written, chunk);
             written += chunk;
         }
@@ -157,43 +179,91 @@ static Allocation allocate_blob(uint8_t* image, uint8_t* fat, const FileBlob* bl
     return alloc;
 }
 
-static void fill_name(uint8_t out[11], const char* raw)
+static void fill_name(uint8_t out[11], const char* name)
 {
-    memcpy(out, raw, 11);
+    memcpy(out, name, 11);
 }
 
-static void write_dir_entry(DirectoryEntry* entry, const char* raw_name, uint8_t attributes, uint16_t first_cluster, uint32_t size)
+static void write_dir_entry(DirectoryEntry* entry, const char* name, uint8_t attributes, uint16_t first_cluster, uint32_t size)
 {
     memset(entry, 0, sizeof(*entry));
-    fill_name(entry->name, raw_name);
+    fill_name(entry->name, name);
     entry->attributes = attributes;
     entry->first_cluster_low = first_cluster;
     entry->size = size;
 }
 
-static void write_directory_contents(uint8_t* image, const Allocation* dir_alloc, const Allocation* demo_alloc)
+static void write_directory_chain(uint8_t* image, const Allocation* dir_alloc, const Allocation* demo_alloc)
 {
-    DirectoryEntry* entries = (DirectoryEntry*)(image + cluster_offset(dir_alloc->first_cluster));
+    DirectoryEntry* entries = (DirectoryEntry*)(image + cluster_byte_offset(dir_alloc->first_cluster));
+    uint32_t bytes = (uint32_t)dir_alloc->cluster_count * SECTOR_SIZE * SECTORS_PER_CLUSTER;
 
-    memset(entries, 0, SECTOR_SIZE * dir_alloc->cluster_count);
-    write_dir_entry(&entries[0], ".          ", 0x10, dir_alloc->first_cluster, 0);
-    write_dir_entry(&entries[1], "..         ", 0x10, 0, 0);
+    memset(entries, 0, bytes);
+    write_dir_entry(&entries[0], ".          ", FAT16_DIRECTORY, dir_alloc->first_cluster, 0);
+    write_dir_entry(&entries[1], "..         ", FAT16_DIRECTORY, 0, 0);
 
     if (demo_alloc->cluster_count != 0)
-        write_dir_entry(&entries[2], "TEST    TXT", 0x20, demo_alloc->first_cluster, demo_alloc->size);
+        write_dir_entry(&entries[2], "TEST    TXT", FAT16_ARCHIVE, demo_alloc->first_cluster, demo_alloc->size);
+}
+
+static void write_mbr(uint8_t* image, const FileBlob* mbr_blob)
+{
+    PartitionEntry* partitions;
+
+    if (mbr_blob->size != SECTOR_SIZE)
+        fail("MBR must be exactly 512 bytes");
+
+    memcpy(image, mbr_blob->data, SECTOR_SIZE);
+    partitions = (PartitionEntry*)(image + 0x1BE);
+    memset(partitions, 0, sizeof(PartitionEntry) * 4u);
+
+    partitions[0].status = 0x80;
+    partitions[0].first_chs[0] = 0x01;
+    partitions[0].first_chs[1] = 0x01;
+    partitions[0].first_chs[2] = 0x00;
+    partitions[0].type = PARTITION_TYPE_FAT16_LBA;
+    partitions[0].last_chs[0] = 0xFE;
+    partitions[0].last_chs[1] = 0xFF;
+    partitions[0].last_chs[2] = 0xFF;
+    partitions[0].first_lba = PARTITION_START_LBA;
+    partitions[0].sector_count = PARTITION_SECTORS;
+
+    image[510] = 0x55;
+    image[511] = 0xAA;
+}
+
+static void write_vbr_and_metadata(uint8_t* image, const FileBlob* vbr_blob)
+{
+    uint32_t partition_offset = PARTITION_START_LBA * SECTOR_SIZE;
+    uint16_t* fat_primary;
+    uint16_t* fat_secondary;
+
+    if (vbr_blob->size != SECTOR_SIZE)
+        fail("VBR must be exactly 512 bytes");
+
+    memcpy(image + partition_offset, vbr_blob->data, SECTOR_SIZE);
+
+    fat_primary = (uint16_t*)(image + partition_byte_offset(FAT_START_SECTOR));
+    fat_secondary = (uint16_t*)(image + partition_byte_offset(FAT_START_SECTOR + SECTORS_PER_FAT));
+
+    memset(fat_primary, 0, SECTORS_PER_FAT * SECTOR_SIZE);
+    fat_primary[0] = 0xFFF8u;
+    fat_primary[1] = FAT16_END_OF_CHAIN;
+    memcpy(fat_secondary, fat_primary, SECTORS_PER_FAT * SECTOR_SIZE);
 }
 
 int main(int argc, char** argv)
 {
     uint8_t* image;
-    uint8_t* fat_primary;
-    uint8_t* fat_secondary;
+    uint16_t* fat_primary;
+    uint16_t* fat_secondary;
     DirectoryEntry* root_entries;
-    FileBlob stage1;
-    FileBlob stage2;
-    FileBlob kernel;
-    FileBlob root_test;
-    FileBlob demo_test;
+    FileBlob mbr_blob;
+    FileBlob vbr_blob;
+    FileBlob stage2_blob;
+    FileBlob kernel_blob;
+    FileBlob root_test_blob;
+    FileBlob demo_test_blob;
     Allocation stage2_alloc;
     Allocation kernel_alloc;
     Allocation root_test_alloc;
@@ -203,53 +273,52 @@ int main(int argc, char** argv)
     uint32_t root_index = 0;
     FILE* output;
 
-    if (argc != 7) {
-        fprintf(stderr, "usage: %s <image> <stage1> <stage2> <kernel|-> <root_test|-> <demo_test|->\n", argv[0]);
+    if (argc != 8) {
+        fprintf(stderr, "usage: %s <image> <mbr> <vbr> <stage2> <kernel|-> <root_test|-> <demo_test|->\n", argv[0]);
         return 1;
     }
 
-    stage1 = read_file_blob(argv[2]);
-    stage2 = read_file_blob(argv[3]);
-    kernel = read_file_blob(argv[4]);
-    root_test = read_file_blob(argv[5]);
-    demo_test = read_file_blob(argv[6]);
+    mbr_blob = read_file_blob(argv[2]);
+    vbr_blob = read_file_blob(argv[3]);
+    stage2_blob = read_file_blob(argv[4]);
+    kernel_blob = read_file_blob(argv[5]);
+    root_test_blob = read_file_blob(argv[6]);
+    demo_test_blob = read_file_blob(argv[7]);
 
-    if (stage1.size != SECTOR_SIZE)
-        fail("stage1 boot sector must be exactly 512 bytes");
-    if (stage2.size == 0)
+    if (stage2_blob.size == 0)
         fail("stage2 payload is required");
 
-    image = (uint8_t*)calloc(1, IMAGE_SIZE);
+    image = (uint8_t*)calloc(1, IMAGE_SIZE_BYTES);
     if (!image)
         fail("out of memory");
 
-    memcpy(image, stage1.data, SECTOR_SIZE);
+    write_mbr(image, &mbr_blob);
+    write_vbr_and_metadata(image, &vbr_blob);
 
-    fat_primary = image + RESERVED_SECTORS * SECTOR_SIZE;
-    fat_secondary = fat_primary + SECTORS_PER_FAT * SECTOR_SIZE;
-    fat_primary[0] = 0xF0;
-    fat_primary[1] = 0xFF;
-    fat_primary[2] = 0xFF;
+    fat_primary = (uint16_t*)(image + partition_byte_offset(FAT_START_SECTOR));
+    fat_secondary = (uint16_t*)(image + partition_byte_offset(FAT_START_SECTOR + SECTORS_PER_FAT));
 
-    stage2_alloc = allocate_blob(image, fat_primary, &stage2, &next_cluster, 1);
-    kernel_alloc = allocate_blob(image, fat_primary, &kernel, &next_cluster, 0);
-    root_test_alloc = allocate_blob(image, fat_primary, &root_test, &next_cluster, 0);
+    stage2_alloc = allocate_blob(image, fat_primary, &stage2_blob, &next_cluster, 1);
+    kernel_alloc = allocate_blob(image, fat_primary, &kernel_blob, &next_cluster, 0);
+    root_test_alloc = allocate_blob(image, fat_primary, &root_test_blob, &next_cluster, 0);
     mydir_alloc = allocate_blob(image, fat_primary, &(FileBlob){0}, &next_cluster, 1);
-    demo_alloc = allocate_blob(image, fat_primary, &demo_test, &next_cluster, 0);
+    demo_alloc = allocate_blob(image, fat_primary, &demo_test_blob, &next_cluster, 0);
 
-    write_directory_contents(image, &mydir_alloc, &demo_alloc);
+    write_directory_chain(image, &mydir_alloc, &demo_alloc);
     memcpy(fat_secondary, fat_primary, SECTORS_PER_FAT * SECTOR_SIZE);
 
-    root_entries = (DirectoryEntry*)(image + ROOT_DIR_START_SECTOR * SECTOR_SIZE);
-    write_dir_entry(&root_entries[root_index++], "STAGE2  BIN", 0x20, stage2_alloc.first_cluster, stage2_alloc.size);
+    root_entries = (DirectoryEntry*)(image + partition_byte_offset(ROOT_DIR_START_SECTOR));
+    memset(root_entries, 0, ROOT_DIR_SECTORS * SECTOR_SIZE);
+
+    write_dir_entry(&root_entries[root_index++], "STAGE2  BIN", FAT16_ARCHIVE, stage2_alloc.first_cluster, stage2_alloc.size);
 
     if (kernel_alloc.cluster_count != 0)
-        write_dir_entry(&root_entries[root_index++], "KERNEL  BIN", 0x20, kernel_alloc.first_cluster, kernel_alloc.size);
+        write_dir_entry(&root_entries[root_index++], "KERNEL  BIN", FAT16_ARCHIVE, kernel_alloc.first_cluster, kernel_alloc.size);
 
     if (root_test_alloc.cluster_count != 0)
-        write_dir_entry(&root_entries[root_index++], "TEST    TXT", 0x20, root_test_alloc.first_cluster, root_test_alloc.size);
+        write_dir_entry(&root_entries[root_index++], "TEST    TXT", FAT16_ARCHIVE, root_test_alloc.first_cluster, root_test_alloc.size);
 
-    write_dir_entry(&root_entries[root_index], "MYDIR      ", 0x10, mydir_alloc.first_cluster, 0);
+    write_dir_entry(&root_entries[root_index], "MYDIR      ", FAT16_DIRECTORY, mydir_alloc.first_cluster, 0);
 
     output = fopen(argv[1], "wb");
     if (!output) {
@@ -257,16 +326,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (fwrite(image, 1, IMAGE_SIZE, output) != IMAGE_SIZE)
+    if (fwrite(image, 1, IMAGE_SIZE_BYTES, output) != IMAGE_SIZE_BYTES)
         fail("failed to write image");
 
     fclose(output);
-
     free(image);
-    free_blob(&stage1);
-    free_blob(&stage2);
-    free_blob(&kernel);
-    free_blob(&root_test);
-    free_blob(&demo_test);
+    free_blob(&mbr_blob);
+    free_blob(&vbr_blob);
+    free_blob(&stage2_blob);
+    free_blob(&kernel_blob);
+    free_blob(&root_test_blob);
+    free_blob(&demo_test_blob);
     return 0;
 }

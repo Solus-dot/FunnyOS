@@ -1,264 +1,220 @@
 [ORG 0x7C00]
 [BITS 16]
 
-%define ENDL 0x0D, 0x0A
+%define BUFFER_ADDR         0x7E00
+%define STAGE2_LOAD_SEGMENT 0x3000
 
-jmp short start
-nop
+%define BPB_SECTORS_PER_CLUSTER_OFF 13
+%define BPB_RESERVED_SECTORS_OFF    14
+%define BPB_FAT_COUNT_OFF           16
+%define BPB_DIR_ENTRY_COUNT_OFF     17
+%define BPB_SECTORS_PER_FAT_OFF     22
+%define BPB_HIDDEN_SECTORS_OFF      28
 
-bdb_oem:                    db 'MSWIN4.1'
-bdb_bytes_per_sector:       dw 512
-bdb_sectors_per_cluster:    db 1
-bdb_reserved_sectors:       dw 1
-bdb_fat_count:              db 2
-bdb_dir_entries_count:      dw 0xE0
-bdb_total_sectors:          dw 2880
-bdb_media_descriptor:       db 0xF0
-bdb_sectors_per_fat:        dw 9
-bdb_sectors_per_track:      dw 18
-bdb_heads:                  dw 2
-bdb_hidden_sectors:         dd 0
-bdb_large_sector_count:     dd 0
+    jmp short start
+    nop
 
-ebr_drive_number:           db 0
-                            db 0
-ebr_signature:              db 0x29
-ebr_volume_id:              db 0x11, 0x69, 0x42, 0x13
-ebr_volume_label:           db '  FunnyOS  '
-ebr_system_id:              db 'FAT12   '
+oem_label:            db 'FUNNYOS '
+bytes_per_sector:     dw 512
+sectors_per_cluster:  db 4
+reserved_sectors:     dw 1
+fat_count:            db 2
+root_entry_count:     dw 512
+total_sectors_16:     dw 0
+media_descriptor:     db 0xF8
+sectors_per_fat:      dw 126
+sectors_per_track:    dw 63
+head_count:           dw 16
+hidden_sectors:       dd 2048
+total_sectors_32:     dd 129024
+drive_number:         db 0x80
+reserved1:            db 0
+boot_signature:       db 0x29
+volume_id:            dd 0x46554E4F
+volume_label:         db 'FunnyOS    '
+filesystem_type:      db 'FAT16   '
 
 start:
-    mov ax, 0
+    cli
+    cld
+    xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
     mov sp, 0x7C00
+    sti
 
-    push es
-    push word .after
-    retf
+    mov [boot_drive], dl
 
-.after:
-    mov [ebr_drive_number], dl
-
-    mov si, msg_loading
-    call puts
-
-    push es
-    mov ah, 0x08
-    int 0x13
-    jc floppy_error
-    pop es
-
-    and cl, 0x3F
-    xor ch, ch
-    mov [bdb_sectors_per_track], cx
-
-    inc dh
-    mov [bdb_heads], dh
-
-    mov ax, [bdb_sectors_per_fat]
-    mov bl, [bdb_fat_count]
-    xor bh, bh
-    mul bx
-    add ax, [bdb_reserved_sectors]
-    push ax
-
-    mov ax, [bdb_dir_entries_count]
+    mov ax, [0x7C00 + BPB_DIR_ENTRY_COUNT_OFF]
     shl ax, 5
-    xor dx, dx
-    div word [bdb_bytes_per_sector]
-    test dx, dx
-    jz .root_dir_ready
-    inc ax
+    add ax, 511
+    shr ax, 9
+    mov [root_left], ax
 
-.root_dir_ready:
-    mov cl, al
-    pop ax
-    mov dl, [ebr_drive_number]
-    mov bx, buffer
-    call disk_read
+    xor ax, ax
+    mov al, [0x7C00 + BPB_FAT_COUNT_OFF]
+    mul word [0x7C00 + BPB_SECTORS_PER_FAT_OFF]
+    add ax, [0x7C00 + BPB_RESERVED_SECTORS_OFF]
+    movzx eax, ax
+    mov [data_lba_rel], eax
+    movzx edx, word [root_left]
+    add [data_lba_rel], edx
+    add eax, [0x7C00 + BPB_HIDDEN_SECTORS_OFF]
+    mov [current_lba], eax
 
+find_stage2:
+    cmp word [root_left], 0
+    je fail
+
+    mov eax, [current_lba]
     xor bx, bx
-    mov di, buffer
-
-.search_stage2:
-    mov si, file_stage2_bin
-    mov cx, 11
-    push di
-    repe cmpsb
-    pop di
-    je .found_stage2
-
-    add di, 32
-    inc bx
-    cmp bx, [bdb_dir_entries_count]
-    jl .search_stage2
-    jmp stage2_not_found_error
-
-.found_stage2:
-    mov ax, [di + 26]
-    mov [stage2_cluster], ax
-
-    mov ax, [bdb_reserved_sectors]
-    mov bx, buffer
-    mov cl, [bdb_sectors_per_fat]
-    mov dl, [ebr_drive_number]
-    call disk_read
-
-    mov bx, STAGE2_LOAD_SEGMENT
     mov es, bx
-    mov bx, STAGE2_LOAD_OFFSET
+    mov bx, BUFFER_ADDR
+    mov cx, 1
+    call read_lba
+    jc fail
 
-.load_stage2:
-    mov ax, [stage2_cluster]
-    add ax, 31
-    mov cl, 1
-    mov dl, [ebr_drive_number]
-    call disk_read
+    mov di, BUFFER_ADDR
+    mov cx, 16
 
-    add bx, [bdb_bytes_per_sector]
+.next_entry:
+    cmp byte [di], 0
+    je fail
+    push cx
+    push di
+    push si
+    mov si, stage2_name
+    mov cx, 11
+    repe cmpsb
+    pop si
+    pop di
+    pop cx
+    je .found
+    add di, 32
+    loop .next_entry
 
-    mov ax, [stage2_cluster]
-    mov cx, 3
-    mul cx
-    mov cx, 2
-    div cx
+    inc dword [current_lba]
+    dec word [root_left]
+    jmp find_stage2
 
-    mov si, buffer
-    add si, ax
-    mov ax, [ds:si]
-    or dx, dx
-    jz .even
-    shr ax, 4
-    jmp .next_cluster
-
-.even:
-    and ax, 0x0FFF
-
-.next_cluster:
-    cmp ax, 0x0FF8
-    jae .read_done
-
-    mov [stage2_cluster], ax
-    jmp .load_stage2
-
-.read_done:
-    mov dl, [ebr_drive_number]
+.found:
+    mov ax, [di + 26]
+    mov [current_cluster], ax
     mov ax, STAGE2_LOAD_SEGMENT
-    mov ds, ax
     mov es, ax
-    jmp STAGE2_LOAD_SEGMENT:STAGE2_LOAD_OFFSET
+    xor bx, bx
 
-floppy_error:
-    mov si, msg_read_failed
+load_stage2:
+    mov ax, [current_cluster]
+    cmp ax, 2
+    jb fail
+    cmp ax, 0xFFF8
+    jae boot_stage2
+
+    movzx eax, ax
+    sub eax, 2
+    xor ecx, ecx
+    mov cl, [0x7C00 + BPB_SECTORS_PER_CLUSTER_OFF]
+    imul eax, ecx
+    add eax, [data_lba_rel]
+    add eax, [0x7C00 + BPB_HIDDEN_SECTORS_OFF]
+    xor cx, cx
+    mov cl, [0x7C00 + BPB_SECTORS_PER_CLUSTER_OFF]
+    call read_lba
+    jc fail
+
+    mov ax, es
+    xor dx, dx
+    mov dl, [0x7C00 + BPB_SECTORS_PER_CLUSTER_OFF]
+    shl dx, 5
+    add ax, dx
+    mov es, ax
+
+    xor eax, eax
+    mov ax, [current_cluster]
+    shl eax, 1
+    shr eax, 9
+    movzx ecx, word [0x7C00 + BPB_RESERVED_SECTORS_OFF]
+    add eax, ecx
+    add eax, [0x7C00 + BPB_HIDDEN_SECTORS_OFF]
+    push es
+    xor bx, bx
+    mov es, bx
+    mov bx, BUFFER_ADDR
+    mov cx, 1
+    call read_lba
+    pop es
+    jc fail
+
+    mov bx, [current_cluster]
+    shl bx, 1
+    and bx, 0x01FF
+    add bx, BUFFER_ADDR
+    mov ax, [bx]
+    mov [current_cluster], ax
+    jmp load_stage2
+
+boot_stage2:
+    mov dl, [boot_drive]
+    jmp STAGE2_LOAD_SEGMENT:0
+
+read_lba:
+    push eax
+    mov [disk_packet.count], cx
+    mov [disk_packet.offset], bx
+    mov dx, es
+    mov [disk_packet.segment], dx
+    pop eax
+    mov [disk_packet.lba_low], eax
+    mov dword [disk_packet.lba_high], 0
+    mov si, disk_packet
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    int 0x13
+    ret
+
+fail:
+    mov si, msg_failed
     call puts
-    jmp wait_key_and_reboot
-
-stage2_not_found_error:
-    mov si, msg_stage2_not_found
-    call puts
-    jmp wait_key_and_reboot
-
-wait_key_and_reboot:
-    mov ah, 0
-    int 0x16
-    jmp 0FFFFh:0
+.halt:
+    cli
+    hlt
+    jmp .halt
 
 puts:
-    push si
-    push ax
-
-.loop:
+.next:
     lodsb
-    or al, al
+    test al, al
     jz .done
     mov ah, 0x0E
     mov bh, 0
     int 0x10
-    jmp .loop
-
+    jmp .next
 .done:
-    pop ax
-    pop si
     ret
 
-lba_to_chs:
-    push ax
-    push dx
+msg_failed:      db 'Boot failed', 0
+stage2_name:     db 'STAGE2  BIN'
+boot_drive:      db 0
+current_cluster: dw 0
+root_left:       dw 0
+current_lba:     dd 0
+data_lba_rel:    dd 0
 
-    xor dx, dx
-    div word [bdb_sectors_per_track]
-    inc dx
-    mov cx, dx
+disk_packet:
+    db 0x10
+    db 0
+.count:
+    dw 0
+.offset:
+    dw 0
+.segment:
+    dw 0
+.lba_low:
+    dd 0
+.lba_high:
+    dd 0
 
-    xor dx, dx
-    div word [bdb_heads]
-    mov dh, dl
-    mov ch, al
-    shl ah, 6
-    or cl, ah
-
-    pop ax
-    mov dl, al
-    pop ax
-    ret
-
-disk_read:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-
-    push cx
-    call lba_to_chs
-    pop ax
-
-    mov ah, 0x02
-    mov di, 3
-
-.retry:
-    pusha
-    stc
-    int 0x13
-    jnc .success
-
-    popa
-    call disk_reset
-    dec di
-    test di, di
-    jnz .retry
-    jmp floppy_error
-
-.success:
-    popa
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-disk_reset:
-    pusha
-    mov ah, 0
-    stc
-    int 0x13
-    jc floppy_error
-    popa
-    ret
-
-msg_loading:            db 'Loading stage2...', ENDL, 0
-msg_read_failed:        db 'Read from disk failed!', ENDL, 0
-msg_stage2_not_found:   db 'STAGE2.BIN file not found!', ENDL, 0
-file_stage2_bin:        db 'STAGE2  BIN'
-stage2_cluster:         dw 0
-
-STAGE2_LOAD_SEGMENT     equ 0x2000
-STAGE2_LOAD_OFFSET      equ 0
-
-times 510-($-$$) db 0
+times 510 - ($ - $$) db 0
 dw 0xAA55
-
-buffer:

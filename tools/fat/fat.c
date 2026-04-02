@@ -8,7 +8,19 @@ typedef uint8_t bool;
 
 #define true 1
 #define false 0
-#define FAT12_DIRECTORY 0x10
+
+#define FAT_DIRECTORY 0x10u
+#define FAT_LFN 0x0Fu
+#define FAT16_END_OF_CHAIN 0xFFF8u
+
+typedef struct __attribute__((packed)) PartitionEntry {
+    uint8_t status;
+    uint8_t first_chs[3];
+    uint8_t type;
+    uint8_t last_chs[3];
+    uint32_t first_lba;
+    uint32_t sector_count;
+} PartitionEntry;
 
 typedef struct __attribute__((packed)) BootSector {
     uint8_t jump[3];
@@ -49,7 +61,8 @@ typedef struct __attribute__((packed)) DirectoryEntry {
 } DirectoryEntry;
 
 static BootSector g_boot_sector;
-static uint8_t* g_fat;
+static PartitionEntry g_partition;
+static uint16_t* g_fat;
 static uint32_t g_root_lba;
 static uint32_t g_root_sectors;
 static uint32_t g_data_lba;
@@ -57,38 +70,19 @@ static uint32_t g_data_lba;
 static bool read_sectors(FILE* disk, uint32_t lba, uint32_t count, void* buffer_out)
 {
     bool ok = true;
-    ok = ok && (fseek(disk, (long)(lba * g_boot_sector.bytes_per_sector), SEEK_SET) == 0);
+    ok = ok && (fseek(disk, (long)lba * (long)g_boot_sector.bytes_per_sector, SEEK_SET) == 0);
     ok = ok && (fread(buffer_out, g_boot_sector.bytes_per_sector, count, disk) == count);
     return ok;
 }
 
-static bool init_image(FILE* disk)
+static uint32_t partition_lba(uint32_t relative_lba)
 {
-    uint32_t root_size;
-
-    if (fread(&g_boot_sector, sizeof(g_boot_sector), 1, disk) != 1)
-        return false;
-
-    g_root_lba = g_boot_sector.reserved_sectors + g_boot_sector.sectors_per_fat * g_boot_sector.fat_count;
-    root_size = sizeof(DirectoryEntry) * g_boot_sector.dir_entry_count;
-    g_root_sectors = root_size / g_boot_sector.bytes_per_sector;
-    if (root_size % g_boot_sector.bytes_per_sector != 0)
-        ++g_root_sectors;
-
-    g_data_lba = g_root_lba + g_root_sectors;
-
-    g_fat = (uint8_t*)malloc(g_boot_sector.sectors_per_fat * g_boot_sector.bytes_per_sector);
-    if (!g_fat)
-        return false;
-
-    return read_sectors(disk, g_boot_sector.reserved_sectors, g_boot_sector.sectors_per_fat, g_fat);
+    return g_partition.first_lba + relative_lba;
 }
 
-static uint16_t fat12_next_cluster(uint16_t cluster)
+static uint16_t fat16_next_cluster(uint16_t cluster)
 {
-    uint32_t fat_index = (uint32_t)cluster * 3u / 2u;
-    uint16_t value = *(uint16_t*)(g_fat + fat_index);
-    return (cluster & 1u) ? (uint16_t)(value >> 4) : (uint16_t)(value & 0x0fffu);
+    return g_fat[cluster];
 }
 
 static uint32_t cluster_to_lba(uint16_t cluster)
@@ -96,23 +90,79 @@ static uint32_t cluster_to_lba(uint16_t cluster)
     return g_data_lba + (uint32_t)(cluster - 2u) * g_boot_sector.sectors_per_cluster;
 }
 
+static bool init_image(FILE* disk)
+{
+    PartitionEntry partitions[4];
+    uint32_t root_size;
+    uint32_t total_sectors;
+    size_t partition_index;
+    bool found_active = false;
+
+    if (fseek(disk, 0, SEEK_SET) != 0)
+        return false;
+
+    if (fseek(disk, 0x1BE, SEEK_SET) != 0)
+        return false;
+
+    if (fread(partitions, sizeof(PartitionEntry), 4, disk) != 4)
+        return false;
+
+    for (partition_index = 0; partition_index < 4; ++partition_index) {
+        if (partitions[partition_index].status == 0x80) {
+            g_partition = partitions[partition_index];
+            found_active = true;
+            break;
+        }
+    }
+
+    if (!found_active)
+        return false;
+
+    if (g_partition.first_lba == 0 || g_partition.sector_count == 0)
+        return false;
+
+    if (fseek(disk, (long)g_partition.first_lba * 512L, SEEK_SET) != 0)
+        return false;
+
+    if (fread(&g_boot_sector, sizeof(g_boot_sector), 1, disk) != 1)
+        return false;
+
+    total_sectors = g_boot_sector.total_sectors ? g_boot_sector.total_sectors : g_boot_sector.large_sector_count;
+    if (total_sectors == 0 || g_boot_sector.sectors_per_fat == 0)
+        return false;
+
+    g_root_lba = partition_lba(g_boot_sector.reserved_sectors + (uint32_t)g_boot_sector.fat_count * g_boot_sector.sectors_per_fat);
+    root_size = (uint32_t)sizeof(DirectoryEntry) * g_boot_sector.dir_entry_count;
+    g_root_sectors = root_size / g_boot_sector.bytes_per_sector;
+    if ((root_size % g_boot_sector.bytes_per_sector) != 0)
+        ++g_root_sectors;
+    g_data_lba = g_root_lba + g_root_sectors;
+
+    g_fat = (uint16_t*)malloc((size_t)g_boot_sector.sectors_per_fat * g_boot_sector.bytes_per_sector);
+    if (!g_fat)
+        return false;
+
+    return read_sectors(disk, partition_lba(g_boot_sector.reserved_sectors), g_boot_sector.sectors_per_fat, g_fat);
+}
+
 static void print_name(const uint8_t name[11])
 {
     bool has_extension = false;
+    int i;
 
-    for (int i = 8; i < 11; ++i) {
+    for (i = 8; i < 11; ++i) {
         if (name[i] != ' ') {
             has_extension = true;
             break;
         }
     }
 
-    for (int i = 0; i < 8 && name[i] != ' '; ++i)
+    for (i = 0; i < 8 && name[i] != ' '; ++i)
         putchar(name[i]);
 
     if (has_extension) {
         putchar('.');
-        for (int i = 8; i < 11 && name[i] != ' '; ++i)
+        for (i = 8; i < 11 && name[i] != ' '; ++i)
             putchar(name[i]);
     }
 }
@@ -120,50 +170,84 @@ static void print_name(const uint8_t name[11])
 static void make_fat_name(const char* name, uint8_t out[11])
 {
     const char* dot = strchr(name, '.');
+    int i;
 
     memset(out, ' ', 11);
     if (!dot)
         dot = name + strlen(name);
 
-    for (int i = 0; i < 8 && name[i] != '\0' && name + i < dot; ++i)
+    for (i = 0; i < 8 && name[i] != '\0' && name + i < dot; ++i)
         out[i] = (uint8_t)toupper((unsigned char)name[i]);
 
     if (*dot == '.') {
-        for (int i = 0; i < 3 && dot[i + 1] != '\0'; ++i)
+        for (i = 0; i < 3 && dot[i + 1] != '\0'; ++i)
             out[i + 8] = (uint8_t)toupper((unsigned char)dot[i + 1]);
     }
 }
 
+static bool is_printable_entry(const DirectoryEntry* entry)
+{
+    if (entry->name[0] == 0x00 || entry->name[0] == 0xE5)
+        return false;
+    if (entry->attributes == FAT_LFN)
+        return false;
+    return true;
+}
+
+static bool read_cluster_chain(FILE* disk, uint16_t first_cluster, uint8_t** data_out, uint32_t* size_out)
+{
+    uint16_t cluster = first_cluster;
+    uint32_t cluster_size = (uint32_t)g_boot_sector.sectors_per_cluster * g_boot_sector.bytes_per_sector;
+    uint8_t* buffer = NULL;
+    uint32_t capacity = 0;
+    uint32_t used = 0;
+
+    if (cluster < 2u)
+        return false;
+
+    while (cluster < FAT16_END_OF_CHAIN) {
+        uint8_t* next_buffer = (uint8_t*)realloc(buffer, capacity + cluster_size);
+        if (!next_buffer) {
+            free(buffer);
+            return false;
+        }
+
+        buffer = next_buffer;
+        if (!read_sectors(disk, cluster_to_lba(cluster), g_boot_sector.sectors_per_cluster, buffer + capacity)) {
+            free(buffer);
+            return false;
+        }
+
+        capacity += cluster_size;
+        used += cluster_size;
+        cluster = fat16_next_cluster(cluster);
+    }
+
+    *data_out = buffer;
+    *size_out = used;
+    return true;
+}
+
 static bool read_directory(FILE* disk, const DirectoryEntry* dir, DirectoryEntry** entries_out, uint32_t* count_out)
 {
-    uint32_t sectors = g_boot_sector.sectors_per_cluster;
-    uint32_t bytes = sectors * g_boot_sector.bytes_per_sector;
-    DirectoryEntry* entries;
+    uint8_t* raw = NULL;
+    uint32_t bytes = 0;
 
     if (!dir) {
         bytes = g_root_sectors * g_boot_sector.bytes_per_sector;
-        entries = (DirectoryEntry*)malloc(bytes);
-        if (!entries)
+        raw = (uint8_t*)malloc(bytes);
+        if (!raw)
             return false;
-        if (!read_sectors(disk, g_root_lba, g_root_sectors, entries)) {
-            free(entries);
+        if (!read_sectors(disk, g_root_lba, g_root_sectors, raw)) {
+            free(raw);
             return false;
         }
-        *entries_out = entries;
-        *count_out = bytes / sizeof(DirectoryEntry);
-        return true;
+    } else {
+        if (!read_cluster_chain(disk, dir->first_cluster_low, &raw, &bytes))
+            return false;
     }
 
-    entries = (DirectoryEntry*)malloc(bytes);
-    if (!entries)
-        return false;
-
-    if (!read_sectors(disk, cluster_to_lba(dir->first_cluster_low), sectors, entries)) {
-        free(entries);
-        return false;
-    }
-
-    *entries_out = entries;
+    *entries_out = (DirectoryEntry*)raw;
     *count_out = bytes / sizeof(DirectoryEntry);
     return true;
 }
@@ -171,14 +255,17 @@ static bool read_directory(FILE* disk, const DirectoryEntry* dir, DirectoryEntry
 static DirectoryEntry* find_entry(DirectoryEntry* entries, uint32_t count, const char* name)
 {
     uint8_t fat_name[11];
+    uint32_t i;
 
     make_fat_name(name, fat_name);
 
-    for (uint32_t i = 0; i < count; ++i) {
-        if (entries[i].name[0] == 0x00)
-            break;
-        if (entries[i].name[0] == 0xE5)
+    for (i = 0; i < count; ++i) {
+        if (!is_printable_entry(&entries[i])) {
+            if (entries[i].name[0] == 0x00)
+                break;
             continue;
+        }
+
         if (memcmp(entries[i].name, fat_name, 11) == 0)
             return &entries[i];
     }
@@ -231,7 +318,7 @@ static DirectoryEntry resolve_path(FILE* disk, const char* path, bool* ok_out)
         if (!slash)
             break;
 
-        if ((current.attributes & FAT12_DIRECTORY) == 0)
+        if ((current.attributes & FAT_DIRECTORY) == 0)
             return current;
 
         cursor = slash + 1;
@@ -245,15 +332,16 @@ static bool dump_file(FILE* disk, const DirectoryEntry* file)
 {
     uint32_t remaining = file->size;
     uint16_t cluster = file->first_cluster_low;
-    uint8_t* sector = (uint8_t*)malloc(g_boot_sector.sectors_per_cluster * g_boot_sector.bytes_per_sector);
+    uint32_t cluster_size = (uint32_t)g_boot_sector.sectors_per_cluster * g_boot_sector.bytes_per_sector;
+    uint8_t* buffer = (uint8_t*)malloc(cluster_size);
 
-    if (!sector)
+    if (!buffer)
         return false;
 
-    while (cluster < 0x0ff8u && remaining > 0) {
-        uint32_t chunk = g_boot_sector.sectors_per_cluster * g_boot_sector.bytes_per_sector;
-        if (!read_sectors(disk, cluster_to_lba(cluster), g_boot_sector.sectors_per_cluster, sector)) {
-            free(sector);
+    while (cluster < FAT16_END_OF_CHAIN && remaining > 0) {
+        uint32_t chunk = cluster_size;
+        if (!read_sectors(disk, cluster_to_lba(cluster), g_boot_sector.sectors_per_cluster, buffer)) {
+            free(buffer);
             return false;
         }
 
@@ -261,17 +349,17 @@ static bool dump_file(FILE* disk, const DirectoryEntry* file)
             chunk = remaining;
 
         for (uint32_t i = 0; i < chunk; ++i) {
-            if (isprint(sector[i]) || sector[i] == '\n' || sector[i] == '\r' || sector[i] == '\t')
-                fputc(sector[i], stdout);
+            if (isprint(buffer[i]) || buffer[i] == '\n' || buffer[i] == '\r' || buffer[i] == '\t')
+                fputc(buffer[i], stdout);
             else
-                printf("<%02x>", sector[i]);
+                printf("<%02x>", buffer[i]);
         }
 
         remaining -= chunk;
-        cluster = fat12_next_cluster(cluster);
+        cluster = fat16_next_cluster(cluster);
     }
 
-    free(sector);
+    free(buffer);
     return true;
 }
 
@@ -284,12 +372,14 @@ static bool list_root(FILE* disk)
         return false;
 
     for (uint32_t i = 0; i < count; ++i) {
-        if (entries[i].name[0] == 0x00)
-            break;
-        if (entries[i].name[0] == 0xE5)
+        if (!is_printable_entry(&entries[i])) {
+            if (entries[i].name[0] == 0x00)
+                break;
             continue;
+        }
+
         print_name(entries[i].name);
-        if (entries[i].attributes & FAT12_DIRECTORY)
+        if (entries[i].attributes & FAT_DIRECTORY)
             printf(" <DIR>");
         printf("\n");
     }
@@ -316,7 +406,7 @@ int main(int argc, char** argv)
     }
 
     if (!init_image(disk)) {
-        fprintf(stderr, "failed to initialize FAT12 image\n");
+        fprintf(stderr, "failed to initialize FAT16 image\n");
         fclose(disk);
         return 1;
     }
@@ -328,34 +418,46 @@ int main(int argc, char** argv)
             free(g_fat);
             return 1;
         }
-        fclose(disk);
-        free(g_fat);
-        return 0;
+    } else {
+        entry = resolve_path(disk, argv[2], &ok);
+        if (!ok) {
+            fprintf(stderr, "%s not found\n", argv[2]);
+            fclose(disk);
+            free(g_fat);
+            return 1;
+        }
+
+        if (entry.attributes & FAT_DIRECTORY) {
+            DirectoryEntry* entries = NULL;
+            uint32_t count = 0;
+            if (!read_directory(disk, &entry, &entries, &count)) {
+                fprintf(stderr, "failed to read directory\n");
+                fclose(disk);
+                free(g_fat);
+                return 1;
+            }
+
+            for (uint32_t i = 0; i < count; ++i) {
+                if (!is_printable_entry(&entries[i])) {
+                    if (entries[i].name[0] == 0x00)
+                        break;
+                    continue;
+                }
+                print_name(entries[i].name);
+                if (entries[i].attributes & FAT_DIRECTORY)
+                    printf(" <DIR>");
+                printf("\n");
+            }
+
+            free(entries);
+        } else if (!dump_file(disk, &entry)) {
+            fprintf(stderr, "failed to dump file\n");
+            fclose(disk);
+            free(g_fat);
+            return 1;
+        }
     }
 
-    entry = resolve_path(disk, argv[2], &ok);
-    if (!ok) {
-        fprintf(stderr, "path not found: %s\n", argv[2]);
-        fclose(disk);
-        free(g_fat);
-        return 1;
-    }
-
-    if (entry.attributes & FAT12_DIRECTORY) {
-        printf("%s is a directory\n", argv[2]);
-        fclose(disk);
-        free(g_fat);
-        return 0;
-    }
-
-    if (!dump_file(disk, &entry)) {
-        fprintf(stderr, "failed to read file contents\n");
-        fclose(disk);
-        free(g_fat);
-        return 1;
-    }
-
-    printf("\n");
     fclose(disk);
     free(g_fat);
     return 0;
