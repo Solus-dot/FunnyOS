@@ -132,3 +132,42 @@ bool ata_read_sectors(uint32_t lba, uint8_t count, void* out)
 
     return true;
 }
+
+bool ata_write_sectors(uint32_t lba, uint8_t count, const void* data)
+{
+    uint8_t sector;
+    const uint16_t* words = (const uint16_t*)data;
+
+    if (count == 0)
+        return true;
+    if (lba > 0x0FFFFFFFu)
+        return false;
+
+    for (sector = 0; sector < count; ++sector) {
+        uint32_t current_lba = lba + sector;
+        uint16_t i;
+
+        if (!ata_wait_not_busy())
+            return false;
+
+        io_out8(g_ata_io_base + ATA_DRIVE_OFFSET, (uint8_t)(g_ata_drive_head | ((current_lba >> 24) & 0x0Fu)));
+        ata_io_wait();
+        io_out8(g_ata_io_base + ATA_SECTOR_COUNT_OFFSET, 1);
+        io_out8(g_ata_io_base + ATA_LBA_LOW_OFFSET, (uint8_t)(current_lba & 0xFFu));
+        io_out8(g_ata_io_base + ATA_LBA_MID_OFFSET, (uint8_t)((current_lba >> 8) & 0xFFu));
+        io_out8(g_ata_io_base + ATA_LBA_HIGH_OFFSET, (uint8_t)((current_lba >> 16) & 0xFFu));
+        io_out8(g_ata_io_base + ATA_COMMAND_OFFSET, 0x30u);
+
+        if (!ata_wait_drq())
+            return false;
+
+        for (i = 0; i < 256u; ++i)
+            io_out16(g_ata_io_base + ATA_DATA_OFFSET, words[sector * 256u + i]);
+
+        ata_io_wait();
+        if (!ata_wait_not_busy())
+            return false;
+    }
+
+    return true;
+}

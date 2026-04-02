@@ -1,6 +1,6 @@
 # FunnyOS
 
-FunnyOS is a small x86 hobby operating system built as a learning project and shaped into a cleaner, standard-tooling codebase over time. It started from the ideas in Nanobyte's tutorial series, but the current project is its own BIOS-booted, hard-disk-based OS with a protected-mode kernel, a read-only FAT16 runtime filesystem, and a tiny interactive shell.
+FunnyOS is a small x86 hobby operating system built as a learning project and shaped into a cleaner, standard-tooling codebase over time. It started from the ideas in Nanobyte's tutorial series, but the current project is its own BIOS-booted, hard-disk-based OS with a protected-mode kernel, a writable FAT16 runtime filesystem, and a tiny interactive shell.
 
 The focus right now is not "do everything," but "do the fundamentals cleanly":
 - standard tools only: `nasm`, GNU cross-compiler tools, `make`, and `qemu`
@@ -15,7 +15,7 @@ Today, FunnyOS can:
 - load `STAGE2.BIN` and `KERNEL.BIN` from a FAT16 partition
 - switch into 32-bit protected mode
 - access the boot disk at runtime using ATA PIO
-- mount a read-only FAT16 filesystem inside the kernel
+- mount a writable FAT16 filesystem inside the kernel
 - provide a small shell with built-ins and external flat-binary programs
 
 Current shell commands:
@@ -25,6 +25,11 @@ Current shell commands:
 - `pwd`
 - `cat <path>`
 - `clear`
+- `mkdir <path>`
+- `write <path> <text>`
+- `append <path> <text>`
+- `rm <path>`
+- `mv <old> <new>`
 
 Current bundled external programs:
 - `HELLO`
@@ -52,7 +57,6 @@ That means:
 That also means it is still intentionally limited:
 - BIOS only, not UEFI
 - FAT16 only
-- read-only filesystem
 - no multitasking
 - no paging
 - no AHCI, SATA, or NVMe support
@@ -65,7 +69,7 @@ The current runtime stack is split like this:
 - `stage2`: real-mode loader that reads FAT16, loads the kernel, prepares `BootInfo`, and enters protected mode
 - `block`: boot-disk sector I/O layer in the kernel
 - `fs`: filesystem-facing kernel API used by the shell
-- `fat16`: read-only FAT16 driver behind the `fs` API
+- `fat16`: FAT16 driver behind the `fs` API
 - `path`: canonical path normalization for shell and filesystem access
 - `program`: flat-binary loader plus tiny kernel-owned program ABI
 - `shell`: user-facing command loop and dispatcher
@@ -166,6 +170,7 @@ The test suite covers:
 - booting to the shell prompt in QEMU
 - shell command execution over serial
 - external program loading and return-to-shell behavior
+- writable file and directory mutations
 - multi-cluster file and directory reads
 - missing-kernel error handling
 

@@ -5,5 +5,6 @@
 
 bool ata_init(uint8_t bios_drive);
 bool ata_read_sectors(uint32_t lba, uint8_t count, void* out);
+bool ata_write_sectors(uint32_t lba, uint8_t count, const void* data);
 
 #endif

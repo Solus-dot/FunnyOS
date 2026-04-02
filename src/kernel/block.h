@@ -6,5 +6,6 @@
 
 bool block_init(const BootInfo* boot_info);
 bool block_read_sectors(uint32_t lba, uint8_t count, void* out);
+bool block_write_sectors(uint32_t lba, uint8_t count, const void* data);
 
 #endif

@@ -22,6 +22,11 @@ static inline uint16_t io_in16(uint16_t port)
     return value;
 }
 
+static inline void io_out16(uint16_t port, uint16_t value)
+{
+    __asm__ volatile("outw %0, %1" : : "a"(value), "Nd"(port));
+}
+
 static inline void cpu_pause(void)
 {
     __asm__ volatile("pause");

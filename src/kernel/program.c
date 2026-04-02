@@ -186,7 +186,7 @@ static bool program_load_binary(const char* path, uint32_t* size_out)
     FsNodeInfo node;
     ProgramLoadContext load_context;
 
-    if (!fs_stat(path, &node))
+    if (fs_stat(path, &node) != FS_OK)
         return false;
     if (node.type != FS_NODE_FILE || node.size == 0u) {
         console_write_line("program load failed");
@@ -202,7 +202,7 @@ static bool program_load_binary(const char* path, uint32_t* size_out)
     load_context.size = 0;
     k_memset(load_context.dst, 0, PROGRAM_MAX_SIZE);
 
-    if (!fs_read_file(path, program_file_chunk_copy, &load_context)) {
+    if (fs_read_file(path, program_file_chunk_copy, &load_context) != FS_OK) {
         console_write_line("program load failed");
         return false;
     }
@@ -274,20 +274,20 @@ ProgramDispatchResult program_dispatch(const char* command, const char* argument
             return PROGRAM_DISPATCH_FAILED;
         }
         if (!program_run_path(path, command, argument_line, cwd)) {
-            if (!fs_stat(path, &(FsNodeInfo){0}))
+            if (fs_stat(path, &(FsNodeInfo){0}) != FS_OK)
                 console_write_line("program not found");
             return PROGRAM_DISPATCH_FAILED;
         }
         return PROGRAM_DISPATCH_EXECUTED;
     }
 
-    if (build_lookup_path("/", command, path, sizeof(path)) && fs_stat(path, &(FsNodeInfo){0})) {
+    if (build_lookup_path("/", command, path, sizeof(path)) && fs_stat(path, &(FsNodeInfo){0}) == FS_OK) {
         if (!program_run_path(path, command, argument_line, cwd))
             return PROGRAM_DISPATCH_FAILED;
         return PROGRAM_DISPATCH_EXECUTED;
     }
 
-    if (build_lookup_path(cwd, command, path, sizeof(path)) && fs_stat(path, &(FsNodeInfo){0})) {
+    if (build_lookup_path(cwd, command, path, sizeof(path)) && fs_stat(path, &(FsNodeInfo){0}) == FS_OK) {
         if (!program_run_path(path, command, argument_line, cwd))
             return PROGRAM_DISPATCH_FAILED;
         return PROGRAM_DISPATCH_EXECUTED;
