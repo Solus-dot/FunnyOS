@@ -15,8 +15,8 @@ STAGE1_SRC := $(SRC_DIR)/boot/stage1/boot.asm
 STAGE2_SRC := $(SRC_DIR)/boot/stage2/stage2.asm
 KERNEL_LD_SCRIPT := $(SRC_DIR)/kernel/linker.ld
 
-KERNEL_C_SRCS := $(SRC_DIR)/kernel/kmain.c
-KERNEL_ASM_SRCS := $(SRC_DIR)/kernel/entry.asm
+KERNEL_C_SRCS := $(wildcard $(SRC_DIR)/kernel/*.c)
+KERNEL_ASM_SRCS := $(wildcard $(SRC_DIR)/kernel/*.asm)
 
 KERNEL_C_OBJS := $(patsubst $(SRC_DIR)/kernel/%.c,$(BUILD_DIR)/kernel/%.o,$(KERNEL_C_SRCS))
 KERNEL_ASM_OBJS := $(patsubst $(SRC_DIR)/kernel/%.asm,$(BUILD_DIR)/kernel/%.o,$(KERNEL_ASM_SRCS))
@@ -27,7 +27,7 @@ FAT_TOOL := $(BUILD_DIR)/tools/fat
 ROOT_TEST_FILE := test.txt
 DEMO_TEST_FILE := test.txt
 
-KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common
+KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/kernel
 
 .PHONY: all image run debug test clean check-build-tools check-run-tools
 

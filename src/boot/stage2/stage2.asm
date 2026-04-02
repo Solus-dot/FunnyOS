@@ -103,33 +103,8 @@ start:
     jc kernel_read_error
     mov [kernel_size], eax
 
-    mov si, mydir_name
-    mov di, found_entry
-    call find_root_entry
-    jc mydir_not_found
-
-    mov al, [found_entry + DIR_ATTRIBUTES_OFF]
-    test al, DIR_ATTR_DIRECTORY
-    jz mydir_not_found
-
-    mov si, found_entry
-    call load_directory_from_entry
-    jc mydir_not_found
-
-    mov si, test_file_name
-    mov di, found_entry
-    call find_subdir_entry
-    jc demo_not_found
-
-    mov si, found_entry
-    mov edi, DEMO_FILE_BUFFER
-    call load_file_from_entry
-    jc demo_read_error
-    mov [demo_file_size], eax
-
     mov si, msg_pm
     call puts16
-    call print_boot_demo
 
     cli
     call enable_a20
@@ -157,18 +132,6 @@ kernel_not_found:
 
 kernel_read_error:
     mov si, msg_kernel_read
-    jmp fatal16
-
-mydir_not_found:
-    mov si, msg_mydir_missing
-    jmp fatal16
-
-demo_not_found:
-    mov si, msg_demo_missing
-    jmp fatal16
-
-demo_read_error:
-    mov si, msg_demo_read
     jmp fatal16
 
 fatal16:
@@ -431,7 +394,6 @@ load_cluster_chain_to_buffer:
     jc .fail
 
     mov eax, [cluster_size_bytes]
-    add edi, eax
     add edx, eax
 
     mov ax, bx
@@ -805,6 +767,7 @@ protected_mode_entry:
     mov ecx, [STAGE2_LOAD_ADDR + kernel_size]
     add ecx, 3
     shr ecx, 2
+    cld
     rep movsd
 
     mov dword [BOOTINFO_ADDR + BOOTINFO_MAGIC_OFF], BOOTINFO_MAGIC

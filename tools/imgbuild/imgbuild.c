@@ -115,6 +115,23 @@ static void free_blob(FileBlob* blob)
     blob->size = 0;
 }
 
+static FileBlob make_repeated_text_blob(const char* line, uint32_t repeat_count)
+{
+    FileBlob blob = {0};
+    size_t line_len = strlen(line);
+    uint32_t i;
+
+    blob.size = (uint32_t)line_len * repeat_count;
+    blob.data = (uint8_t*)malloc(blob.size);
+    if (!blob.data)
+        fail("out of memory");
+
+    for (i = 0; i < repeat_count; ++i)
+        memcpy(blob.data + i * line_len, line, line_len);
+
+    return blob;
+}
+
 static uint32_t partition_byte_offset(uint32_t partition_lba)
 {
     return (PARTITION_START_LBA + partition_lba) * SECTOR_SIZE;
@@ -206,6 +223,23 @@ static void write_directory_chain(uint8_t* image, const Allocation* dir_alloc, c
         write_dir_entry(&entries[2], "TEST    TXT", FAT16_ARCHIVE, demo_alloc->first_cluster, demo_alloc->size);
 }
 
+static void write_big_directory_chain(uint8_t* image, const Allocation* dir_alloc)
+{
+    DirectoryEntry* entries = (DirectoryEntry*)(image + cluster_byte_offset(dir_alloc->first_cluster));
+    uint32_t bytes = (uint32_t)dir_alloc->cluster_count * SECTOR_SIZE * SECTORS_PER_CLUSTER;
+    uint32_t i;
+
+    memset(entries, 0, bytes);
+    write_dir_entry(&entries[0], ".          ", FAT16_DIRECTORY, dir_alloc->first_cluster, 0);
+    write_dir_entry(&entries[1], "..         ", FAT16_DIRECTORY, 0, 0);
+
+    for (i = 0; i < 70u; ++i) {
+        char name[12];
+        snprintf(name, sizeof(name), "ITEM%02u  TXT", i);
+        write_dir_entry(&entries[i + 2u], name, FAT16_ARCHIVE, 0, 0);
+    }
+}
+
 static void write_mbr(uint8_t* image, const FileBlob* mbr_blob)
 {
     PartitionEntry* partitions;
@@ -264,11 +298,14 @@ int main(int argc, char** argv)
     FileBlob kernel_blob;
     FileBlob root_test_blob;
     FileBlob demo_test_blob;
+    FileBlob big_file_blob;
     Allocation stage2_alloc;
     Allocation kernel_alloc;
     Allocation root_test_alloc;
     Allocation mydir_alloc;
     Allocation demo_alloc;
+    Allocation big_file_alloc;
+    Allocation bigdir_alloc;
     uint16_t next_cluster = 2;
     uint32_t root_index = 0;
     FILE* output;
@@ -284,6 +321,7 @@ int main(int argc, char** argv)
     kernel_blob = read_file_blob(argv[5]);
     root_test_blob = read_file_blob(argv[6]);
     demo_test_blob = read_file_blob(argv[7]);
+    big_file_blob = make_repeated_text_blob("FunnyOS big file line for FAT16 multi-cluster testing.\n", 80u);
 
     if (stage2_blob.size == 0)
         fail("stage2 payload is required");
@@ -303,8 +341,11 @@ int main(int argc, char** argv)
     root_test_alloc = allocate_blob(image, fat_primary, &root_test_blob, &next_cluster, 0);
     mydir_alloc = allocate_blob(image, fat_primary, &(FileBlob){0}, &next_cluster, 1);
     demo_alloc = allocate_blob(image, fat_primary, &demo_test_blob, &next_cluster, 0);
+    big_file_alloc = allocate_blob(image, fat_primary, &big_file_blob, &next_cluster, 0);
+    bigdir_alloc = allocate_blob(image, fat_primary, &(FileBlob){0}, &next_cluster, 2);
 
     write_directory_chain(image, &mydir_alloc, &demo_alloc);
+    write_big_directory_chain(image, &bigdir_alloc);
     memcpy(fat_secondary, fat_primary, SECTORS_PER_FAT * SECTOR_SIZE);
 
     root_entries = (DirectoryEntry*)(image + partition_byte_offset(ROOT_DIR_START_SECTOR));
@@ -318,7 +359,11 @@ int main(int argc, char** argv)
     if (root_test_alloc.cluster_count != 0)
         write_dir_entry(&root_entries[root_index++], "TEST    TXT", FAT16_ARCHIVE, root_test_alloc.first_cluster, root_test_alloc.size);
 
-    write_dir_entry(&root_entries[root_index], "MYDIR      ", FAT16_DIRECTORY, mydir_alloc.first_cluster, 0);
+    if (big_file_alloc.cluster_count != 0)
+        write_dir_entry(&root_entries[root_index++], "BIGFILE TXT", FAT16_ARCHIVE, big_file_alloc.first_cluster, big_file_alloc.size);
+
+    write_dir_entry(&root_entries[root_index++], "MYDIR      ", FAT16_DIRECTORY, mydir_alloc.first_cluster, 0);
+    write_dir_entry(&root_entries[root_index], "BIGDIR     ", FAT16_DIRECTORY, bigdir_alloc.first_cluster, 0);
 
     output = fopen(argv[1], "wb");
     if (!output) {
@@ -337,5 +382,6 @@ int main(int argc, char** argv)
     free_blob(&kernel_blob);
     free_blob(&root_test_blob);
     free_blob(&demo_test_blob);
+    free_blob(&big_file_blob);
     return 0;
 }

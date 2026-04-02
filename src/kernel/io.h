@@ -1,0 +1,30 @@
+#ifndef FUNNYOS_KERNEL_IO_H
+#define FUNNYOS_KERNEL_IO_H
+
+#include "../common/types.h"
+
+static inline void io_out8(uint16_t port, uint8_t value)
+{
+    __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline uint8_t io_in8(uint16_t port)
+{
+    uint8_t value;
+    __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+static inline uint16_t io_in16(uint16_t port)
+{
+    uint16_t value;
+    __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+static inline void cpu_pause(void)
+{
+    __asm__ volatile("pause");
+}
+
+#endif

@@ -2,20 +2,32 @@
 
 global _start
 extern kmain
+extern __bss_start
+extern __bss_end
 
 section .text
 _start:
     cli
     mov esi, eax
     cld
-    call setup_platform
+    call clear_bss
     mov esp, stack_top
+    call setup_platform
     push esi
     call kmain
 
 .halt:
     hlt
     jmp .halt
+
+clear_bss:
+    mov edi, __bss_start
+    mov ecx, __bss_end
+    sub ecx, edi
+    xor eax, eax
+    shr ecx, 2
+    rep stosd
+    ret
 
 setup_platform:
     mov al, 0xFF
@@ -51,9 +63,9 @@ idt_descriptor:
 
 section .bss
 align 16
+idt_table:
+    resb 256 * 8
+align 16
 stack_bottom:
     resb 16384
 stack_top:
-align 8
-idt_table:
-    resb 256 * 8
