@@ -32,7 +32,6 @@ Required tools:
 
 The default build no longer depends on:
 - Open Watcom
-- Bochs
 - `mkfs.fat`
 - `mcopy`
 
