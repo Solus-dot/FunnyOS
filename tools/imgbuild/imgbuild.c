@@ -298,20 +298,24 @@ int main(int argc, char** argv)
     FileBlob kernel_blob;
     FileBlob root_test_blob;
     FileBlob demo_test_blob;
+    FileBlob hello_program_blob;
+    FileBlob args_program_blob;
     FileBlob big_file_blob;
     Allocation stage2_alloc;
     Allocation kernel_alloc;
     Allocation root_test_alloc;
     Allocation mydir_alloc;
     Allocation demo_alloc;
+    Allocation hello_program_alloc;
+    Allocation args_program_alloc;
     Allocation big_file_alloc;
     Allocation bigdir_alloc;
     uint16_t next_cluster = 2;
     uint32_t root_index = 0;
     FILE* output;
 
-    if (argc != 8) {
-        fprintf(stderr, "usage: %s <image> <mbr> <vbr> <stage2> <kernel|-> <root_test|-> <demo_test|->\n", argv[0]);
+    if (argc != 10) {
+        fprintf(stderr, "usage: %s <image> <mbr> <vbr> <stage2> <kernel|-> <root_test|-> <demo_test|-> <hello_program|-> <args_program|->\n", argv[0]);
         return 1;
     }
 
@@ -321,6 +325,8 @@ int main(int argc, char** argv)
     kernel_blob = read_file_blob(argv[5]);
     root_test_blob = read_file_blob(argv[6]);
     demo_test_blob = read_file_blob(argv[7]);
+    hello_program_blob = read_file_blob(argv[8]);
+    args_program_blob = read_file_blob(argv[9]);
     big_file_blob = make_repeated_text_blob("FunnyOS big file line for FAT16 multi-cluster testing.\n", 80u);
 
     if (stage2_blob.size == 0)
@@ -341,6 +347,8 @@ int main(int argc, char** argv)
     root_test_alloc = allocate_blob(image, fat_primary, &root_test_blob, &next_cluster, 0);
     mydir_alloc = allocate_blob(image, fat_primary, &(FileBlob){0}, &next_cluster, 1);
     demo_alloc = allocate_blob(image, fat_primary, &demo_test_blob, &next_cluster, 0);
+    hello_program_alloc = allocate_blob(image, fat_primary, &hello_program_blob, &next_cluster, 0);
+    args_program_alloc = allocate_blob(image, fat_primary, &args_program_blob, &next_cluster, 0);
     big_file_alloc = allocate_blob(image, fat_primary, &big_file_blob, &next_cluster, 0);
     bigdir_alloc = allocate_blob(image, fat_primary, &(FileBlob){0}, &next_cluster, 2);
 
@@ -362,6 +370,12 @@ int main(int argc, char** argv)
     if (big_file_alloc.cluster_count != 0)
         write_dir_entry(&root_entries[root_index++], "BIGFILE TXT", FAT16_ARCHIVE, big_file_alloc.first_cluster, big_file_alloc.size);
 
+    if (hello_program_alloc.cluster_count != 0)
+        write_dir_entry(&root_entries[root_index++], "HELLO   BIN", FAT16_ARCHIVE, hello_program_alloc.first_cluster, hello_program_alloc.size);
+
+    if (args_program_alloc.cluster_count != 0)
+        write_dir_entry(&root_entries[root_index++], "ARGS    BIN", FAT16_ARCHIVE, args_program_alloc.first_cluster, args_program_alloc.size);
+
     write_dir_entry(&root_entries[root_index++], "MYDIR      ", FAT16_DIRECTORY, mydir_alloc.first_cluster, 0);
     write_dir_entry(&root_entries[root_index], "BIGDIR     ", FAT16_DIRECTORY, bigdir_alloc.first_cluster, 0);
 
@@ -382,6 +396,8 @@ int main(int argc, char** argv)
     free_blob(&kernel_blob);
     free_blob(&root_test_blob);
     free_blob(&demo_test_blob);
+    free_blob(&hello_program_blob);
+    free_blob(&args_program_blob);
     free_blob(&big_file_blob);
     return 0;
 }

@@ -4,6 +4,7 @@
 #include "keyboard.h"
 #include "kstring.h"
 #include "path.h"
+#include "program.h"
 
 #define SHELL_LINE_CAPACITY 128u
 
@@ -212,6 +213,7 @@ static void shell_execute(char* line)
     char* argument = NULL;
     char* cursor;
     const ShellCommand* shell_command;
+    ProgramDispatchResult dispatch_result;
 
     while (*command != '\0' && k_is_space(*command))
         ++command;
@@ -230,7 +232,9 @@ static void shell_execute(char* line)
 
     shell_command = shell_find_command(command);
     if (shell_command == NULL) {
-        console_write_line("unknown command");
+        dispatch_result = program_dispatch(command, argument, g_cwd);
+        if (dispatch_result == PROGRAM_DISPATCH_NOT_FOUND)
+            console_write_line("unknown command");
         return;
     }
 

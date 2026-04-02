@@ -11,6 +11,8 @@ STAGE2=$7
 KERNEL=$8
 ROOT_TEST=$9
 DEMO_TEST=${10}
+HELLO_PROGRAM=${11}
+ARGS_PROGRAM=${12}
 
 OUT_DIR=build/test-artifacts
 DEFAULT_OUT="$OUT_DIR/qemu-default.log"
@@ -23,6 +25,8 @@ mkdir -p "$OUT_DIR"
 "$FAT_TOOL" "$IMAGE" "MYDIR/TEST.TXT" | grep -F "Hello FunnyOS From a file, Solus here!!~~" >/dev/null
 "$FAT_TOOL" "$IMAGE" "BIGDIR" | grep -F "ITEM69.TXT" >/dev/null
 "$FAT_TOOL" "$IMAGE" "BIGFILE.TXT" | grep -F "FunnyOS big file line for FAT16 multi-cluster testing." >/dev/null
+"$FAT_TOOL" "$IMAGE" "/" | grep -F "HELLO.BIN" >/dev/null
+"$FAT_TOOL" "$IMAGE" "/" | grep -F "ARGS.BIN" >/dev/null
 
 if ! command -v "$QEMU" >/dev/null 2>&1; then
     echo "qemu not found, host-side FAT16 hard-disk check passed"
@@ -57,10 +61,10 @@ run_qemu_capture() {
         writer_pid=$!
         "$QEMU" -drive format=raw,file="$image_path",if=ide -display none -serial stdio -monitor none -no-reboot <"$input_fifo" >"$output_path" 2>&1 &
         qemu_pid=$!
-        sleep 15
+        wait "$writer_pid"
+        sleep 2
     fi
     kill "$qemu_pid" >/dev/null 2>&1 || true
-    kill "$writer_pid" >/dev/null 2>&1 || true
     wait "$qemu_pid" >/dev/null 2>&1 || true
     wait "$writer_pid" >/dev/null 2>&1 || true
     rm -f "$input_fifo"
@@ -70,25 +74,38 @@ cat >"$COMMANDS_IN" <<'EOF'
 help
 pwd
 ls /
+HELLO
+/HELLO.BIN
+ARGS one two
+/MYDIR/TEST.TXT
 cd /MYDIR
 pwd
 cat /MYDIR/TEST.TXT
 ls /BIGDIR
 cat /BIGFILE.TXT
+/NOPE.BIN
 cd /NOPE
 cat /NOPE
+ZZZ
 EOF
 
 run_qemu_capture "$IMAGE" "$DEFAULT_OUT" "$COMMANDS_IN"
 grep -F "FunnyOS shell ready" "$DEFAULT_OUT" >/dev/null
 grep -F "Commands: help ls cd pwd cat clear" "$DEFAULT_OUT" >/dev/null
 grep -F "FunnyOS:/> pwd" "$DEFAULT_OUT" >/dev/null
+grep -F "Hello from HELLO.BIN" "$DEFAULT_OUT" >/dev/null
+grep -F "argc=3" "$DEFAULT_OUT" >/dev/null
+grep -F "argv[1]=one" "$DEFAULT_OUT" >/dev/null
+grep -F "argv[2]=two" "$DEFAULT_OUT" >/dev/null
+grep -F "FunnyOS:/> /MYDIR/TEST.TXT" "$DEFAULT_OUT" >/dev/null
 grep -F "/MYDIR" "$DEFAULT_OUT" >/dev/null
 grep -F "Hello FunnyOS From a file, Solus here!!~~" "$DEFAULT_OUT" >/dev/null
 grep -F "ITEM69.TXT" "$DEFAULT_OUT" >/dev/null
 grep -F "FunnyOS big file line for FAT16 multi-cluster testing." "$DEFAULT_OUT" >/dev/null
+grep -F "program not found" "$DEFAULT_OUT" >/dev/null
+grep -F "unknown command" "$DEFAULT_OUT" >/dev/null
 grep -F "not found" "$DEFAULT_OUT" >/dev/null
 
-"$IMG_TOOL" "$MISSING_KERNEL_IMG" "$MBR" "$STAGE1" "$STAGE2" "-" "$ROOT_TEST" "$DEMO_TEST"
+"$IMG_TOOL" "$MISSING_KERNEL_IMG" "$MBR" "$STAGE1" "$STAGE2" "-" "$ROOT_TEST" "$DEMO_TEST" "$HELLO_PROGRAM" "$ARGS_PROGRAM"
 run_qemu_capture "$MISSING_KERNEL_IMG" "$MISSING_KERNEL_OUT" /dev/null
 grep -F "Stage2: KERNEL.BIN not found" "$MISSING_KERNEL_OUT" >/dev/null
