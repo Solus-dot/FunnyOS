@@ -1,7 +1,6 @@
 #include "../common/bootinfo.h"
-#include "ata.h"
 #include "console.h"
-#include "fat16.h"
+#include "fs.h"
 #include "shell.h"
 
 static void halt_forever(void)
@@ -22,13 +21,8 @@ void kmain(const BootInfo* boot_info)
         halt_forever();
     }
 
-    if (!ata_init(boot_info->boot_drive)) {
-        console_write_line("ATA init failed");
-        halt_forever();
-    }
-
-    if (!fat16_mount(boot_info)) {
-        console_write_line("FAT16 mount failed");
+    if (!fs_init(boot_info)) {
+        console_write_line("FS init failed");
         halt_forever();
     }
     shell_run();

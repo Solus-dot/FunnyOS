@@ -1,23 +1,53 @@
 #include "shell.h"
 #include "console.h"
-#include "fat16.h"
+#include "fs.h"
 #include "keyboard.h"
 #include "kstring.h"
+#include "path.h"
 
-#define SHELL_PATH_CAPACITY 128u
 #define SHELL_LINE_CAPACITY 128u
-#define SHELL_COMPONENT_LIMIT 16u
 
-typedef struct ListContext {
-    bool had_entries;
-} ListContext;
+typedef struct FsListContext {
+    bool wrote_anything;
+} FsListContext;
 
-typedef struct CatContext {
+typedef struct FsReadContext {
     bool wrote_anything;
     char last_char;
-} CatContext;
+} FsReadContext;
 
-static char g_cwd[SHELL_PATH_CAPACITY] = "/";
+typedef void (*ShellCommandHandler)(const char* argument);
+
+typedef struct ShellCommand {
+    const char* name;
+    const char* usage;
+    ShellCommandHandler handler;
+} ShellCommand;
+
+static char g_cwd[PATH_CAPACITY] = "/";
+
+static const char* const MSG_COMMANDS = "Commands: help ls cd pwd cat clear";
+static const char* const MSG_INVALID_PATH = "invalid path";
+static const char* const MSG_NOT_FOUND = "not found";
+static const char* const MSG_NOT_A_DIRECTORY = "not a directory";
+static const char* const MSG_NOT_A_FILE = "not a file";
+static const char* const MSG_FS_ERROR = "fs error";
+
+static void shell_command_help(const char* argument);
+static void shell_command_ls(const char* argument);
+static void shell_command_cd(const char* argument);
+static void shell_command_pwd(const char* argument);
+static void shell_command_cat(const char* argument);
+static void shell_command_clear(const char* argument);
+
+static const ShellCommand g_commands[] = {
+    {"help", NULL, shell_command_help},
+    {"ls", NULL, shell_command_ls},
+    {"cd", "usage: cd <path>", shell_command_cd},
+    {"pwd", NULL, shell_command_pwd},
+    {"cat", "usage: cat <path>", shell_command_cat},
+    {"clear", NULL, shell_command_clear},
+};
 
 static void shell_print_prompt(void)
 {
@@ -28,222 +58,152 @@ static void shell_print_prompt(void)
 
 static void shell_print_usage(const char* usage)
 {
-    console_write_line(usage);
+    if (usage != NULL)
+        console_write_line(usage);
 }
 
-static bool push_component(char components[SHELL_COMPONENT_LIMIT][13], uint32_t* count, const char* start, uint32_t len)
+static bool resolve_path_or_print(const char* input, char* out)
 {
-    uint32_t i;
-
-    if (*count >= SHELL_COMPONENT_LIMIT || len == 0 || len > 12u)
+    if (!path_normalize(g_cwd, input, out, PATH_CAPACITY)) {
+        console_write_line(MSG_INVALID_PATH);
         return false;
+    }
 
-    for (i = 0; i < len; ++i)
-        components[*count][i] = k_toupper(start[i]);
-    components[*count][len] = '\0';
-    ++(*count);
     return true;
 }
 
-static bool normalize_path(const char* cwd, const char* input, char* out, uint32_t capacity)
+static const ShellCommand* shell_find_command(const char* name)
 {
-    char components[SHELL_COMPONENT_LIMIT][13];
-    uint32_t count = 0;
-    const char* cursor;
     uint32_t i;
-    uint32_t pos = 0;
 
-    if (input == NULL || out == NULL || capacity < 2u)
-        return false;
-
-    if (input[0] != '/') {
-        cursor = cwd;
-        while (*cursor == '/')
-            ++cursor;
-        while (*cursor != '\0') {
-            const char* slash = cursor;
-            uint32_t len = 0;
-
-            while (*slash != '\0' && *slash != '/') {
-                ++slash;
-                ++len;
-            }
-
-            if (!push_component(components, &count, cursor, len))
-                return false;
-
-            while (*slash == '/')
-                ++slash;
-            cursor = slash;
-        }
+    for (i = 0; i < sizeof(g_commands) / sizeof(g_commands[0]); ++i) {
+        if (k_strcmp(name, g_commands[i].name) == 0)
+            return &g_commands[i];
     }
 
-    cursor = input;
-    while (*cursor == '/')
-        ++cursor;
-
-    while (*cursor != '\0') {
-        const char* slash = cursor;
-        uint32_t len = 0;
-
-        while (*slash != '\0' && *slash != '/') {
-            ++slash;
-            ++len;
-        }
-
-        if (len == 1u && cursor[0] == '.') {
-        } else if (len == 2u && cursor[0] == '.' && cursor[1] == '.') {
-            if (count != 0)
-                --count;
-        } else if (!push_component(components, &count, cursor, len)) {
-            return false;
-        }
-
-        while (*slash == '/')
-            ++slash;
-        cursor = slash;
-    }
-
-    out[pos++] = '/';
-    if (count == 0u) {
-        out[pos] = '\0';
-        return true;
-    }
-
-    for (i = 0; i < count; ++i) {
-        uint32_t j = 0;
-
-        while (components[i][j] != '\0') {
-            if (pos + 1u >= capacity)
-                return false;
-            out[pos++] = components[i][j++];
-        }
-
-        if (i + 1u < count) {
-            if (pos + 1u >= capacity)
-                return false;
-            out[pos++] = '/';
-        }
-    }
-
-    out[pos] = '\0';
-    return true;
+    return NULL;
 }
 
-static bool print_dir_entry(const FatDirEntry* entry, void* context)
+static bool shell_print_dir_entry(const FsNodeInfo* entry, void* context)
 {
-    ListContext* list_context = (ListContext*)context;
+    FsListContext* list_context = (FsListContext*)context;
 
     console_write(entry->name);
-    if (entry->is_dir)
+    if (entry->type == FS_NODE_DIR)
         console_write(" <DIR>");
     console_write_char('\n');
-    list_context->had_entries = true;
+    list_context->wrote_anything = true;
     return true;
 }
 
-static bool print_file_chunk(const uint8_t* data, uint32_t length, void* context)
+static bool shell_print_file_chunk(const uint8_t* data, uint32_t length, void* context)
 {
-    CatContext* cat_context = (CatContext*)context;
+    FsReadContext* read_context = (FsReadContext*)context;
 
     console_write_n((const char*)data, length);
     if (length != 0u) {
-        cat_context->wrote_anything = true;
-        cat_context->last_char = (char)data[length - 1u];
+        read_context->wrote_anything = true;
+        read_context->last_char = (char)data[length - 1u];
     }
     return true;
 }
 
-static void shell_command_help(void)
+static void shell_command_help(const char* argument)
 {
-    console_write_line("Commands: help ls cd pwd cat clear");
+    (void)argument;
+    console_write_line(MSG_COMMANDS);
 }
 
-static void shell_command_pwd(void)
+static void shell_command_ls(const char* argument)
 {
-    console_write_line(g_cwd);
-}
+    char path[PATH_CAPACITY];
+    FsNodeInfo node;
+    FsListContext list_context;
 
-static void shell_command_ls(const char* arg)
-{
-    char path[SHELL_PATH_CAPACITY];
-    FatDirEntry stat_entry;
-    ListContext list_context = {false};
+    list_context.wrote_anything = false;
 
-    if (arg == NULL || *arg == '\0') {
+    if (argument == NULL || *argument == '\0') {
         k_strcpy(path, g_cwd);
-    } else if (!normalize_path(g_cwd, arg, path, sizeof(path))) {
-        console_write_line("invalid path");
+    } else if (!resolve_path_or_print(argument, path)) {
         return;
     }
 
-    if (!fat16_stat(path, &stat_entry)) {
-        console_write_line("not found");
+    if (!fs_stat(path, &node)) {
+        console_write_line(MSG_NOT_FOUND);
         return;
     }
-
-    if (!stat_entry.is_dir) {
-        console_write_line("not a directory");
+    if (node.type != FS_NODE_DIR) {
+        console_write_line(MSG_NOT_A_DIRECTORY);
         return;
     }
-
-    if (!fat16_list_dir(path, print_dir_entry, &list_context))
-        console_write_line("fs error");
+    if (!fs_list_dir(path, shell_print_dir_entry, &list_context))
+        console_write_line(MSG_FS_ERROR);
 }
 
-static void shell_command_cd(const char* arg)
+static void shell_command_cd(const char* argument)
 {
-    char path[SHELL_PATH_CAPACITY];
-    FatDirEntry stat_entry;
+    char path[PATH_CAPACITY];
+    FsNodeInfo node;
 
-    if (arg == NULL || *arg == '\0') {
+    if (argument == NULL || *argument == '\0') {
         shell_print_usage("usage: cd <path>");
         return;
     }
-    if (!normalize_path(g_cwd, arg, path, sizeof(path))) {
-        console_write_line("invalid path");
+    if (!resolve_path_or_print(argument, path))
+        return;
+    if (!fs_stat(path, &node)) {
+        console_write_line(MSG_NOT_FOUND);
         return;
     }
-    if (!fat16_stat(path, &stat_entry)) {
-        console_write_line("not found");
-        return;
-    }
-    if (!stat_entry.is_dir) {
-        console_write_line("not a directory");
+    if (node.type != FS_NODE_DIR) {
+        console_write_line(MSG_NOT_A_DIRECTORY);
         return;
     }
 
     k_strcpy(g_cwd, path);
 }
 
-static void shell_command_cat(const char* arg)
+static void shell_command_pwd(const char* argument)
 {
-    char path[SHELL_PATH_CAPACITY];
-    FatDirEntry stat_entry;
-    CatContext cat_context = {false, '\0'};
+    (void)argument;
+    console_write_line(g_cwd);
+}
 
-    if (arg == NULL || *arg == '\0') {
+static void shell_command_cat(const char* argument)
+{
+    char path[PATH_CAPACITY];
+    FsNodeInfo node;
+    FsReadContext read_context;
+
+    read_context.wrote_anything = false;
+    read_context.last_char = '\0';
+
+    if (argument == NULL || *argument == '\0') {
         shell_print_usage("usage: cat <path>");
         return;
     }
-    if (!normalize_path(g_cwd, arg, path, sizeof(path))) {
-        console_write_line("invalid path");
+    if (!resolve_path_or_print(argument, path))
+        return;
+    if (!fs_stat(path, &node)) {
+        console_write_line(MSG_NOT_FOUND);
         return;
     }
-    if (!fat16_stat(path, &stat_entry)) {
-        console_write_line("not found");
+    if (node.type == FS_NODE_DIR) {
+        console_write_line(MSG_NOT_A_FILE);
         return;
     }
-    if (stat_entry.is_dir) {
-        console_write_line("not a file");
+    if (!fs_read_file(path, shell_print_file_chunk, &read_context)) {
+        console_write_line(MSG_FS_ERROR);
         return;
     }
-    if (!fat16_read_file(path, print_file_chunk, &cat_context)) {
-        console_write_line("fs error");
-        return;
-    }
-    if (!cat_context.wrote_anything || cat_context.last_char != '\n')
+    if (!read_context.wrote_anything || read_context.last_char != '\n')
         console_write_char('\n');
+}
+
+static void shell_command_clear(const char* argument)
+{
+    (void)argument;
+    console_clear();
 }
 
 static void shell_execute(char* line)
@@ -251,6 +211,7 @@ static void shell_execute(char* line)
     char* command = line;
     char* argument = NULL;
     char* cursor;
+    const ShellCommand* shell_command;
 
     while (*command != '\0' && k_is_space(*command))
         ++command;
@@ -267,21 +228,13 @@ static void shell_execute(char* line)
         argument = cursor;
     }
 
-    if (k_strcmp(command, "help") == 0) {
-        shell_command_help();
-    } else if (k_strcmp(command, "pwd") == 0) {
-        shell_command_pwd();
-    } else if (k_strcmp(command, "ls") == 0) {
-        shell_command_ls(argument);
-    } else if (k_strcmp(command, "cd") == 0) {
-        shell_command_cd(argument);
-    } else if (k_strcmp(command, "cat") == 0) {
-        shell_command_cat(argument);
-    } else if (k_strcmp(command, "clear") == 0) {
-        console_clear();
-    } else {
+    shell_command = shell_find_command(command);
+    if (shell_command == NULL) {
         console_write_line("unknown command");
+        return;
     }
+
+    shell_command->handler(argument);
 }
 
 void shell_run(void)

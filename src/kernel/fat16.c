@@ -1,5 +1,5 @@
 #include "fat16.h"
-#include "ata.h"
+#include "block.h"
 #include "kstring.h"
 
 #define FAT16_MAX_FAT_SECTORS 128u
@@ -63,7 +63,7 @@ static uint32_t g_cluster_size = 0;
 
 static bool read_sector(uint32_t lba, void* out)
 {
-    return ata_read_sectors(lba, 1, out);
+    return block_read_sectors(lba, 1, out);
 }
 
 static uint16_t fat16_next_cluster(uint16_t cluster)
@@ -81,7 +81,7 @@ static bool read_cluster(uint16_t cluster)
     if (g_sectors_per_cluster == 0 || g_sectors_per_cluster > FAT16_MAX_CLUSTER_SECTORS)
         return false;
 
-    return ata_read_sectors(cluster_to_lba(cluster), g_sectors_per_cluster, g_cluster_buffer);
+    return block_read_sectors(cluster_to_lba(cluster), g_sectors_per_cluster, g_cluster_buffer);
 }
 
 static bool should_skip_entry(const DirectoryEntry* entry)
@@ -264,9 +264,9 @@ static bool resolve_path(const char* path, ResolvedPath* out)
     return true;
 }
 
-static FatDirEntry to_public_entry(const DirectoryEntry* entry)
+static Fat16NodeInfo decode_node_info(const DirectoryEntry* entry)
 {
-    FatDirEntry out;
+    Fat16NodeInfo out;
 
     format_name(entry->name, out.name);
     out.is_dir = (entry->attributes & FAT16_DIRECTORY) != 0;
@@ -288,14 +288,14 @@ static bool list_root_dir(Fat16ListCallback callback, void* context)
         entries = (DirectoryEntry*)g_sector_buffer;
         for (i = 0; i < FAT16_SECTOR_SIZE / sizeof(DirectoryEntry); ++i) {
             DirectoryEntry* entry = &entries[i];
-            FatDirEntry public_entry;
+            Fat16NodeInfo public_entry;
 
             if (entry->name[0] == 0x00)
                 return true;
             if (should_skip_entry(entry))
                 continue;
 
-            public_entry = to_public_entry(entry);
+            public_entry = decode_node_info(entry);
             if (!callback(&public_entry, context))
                 return true;
         }
@@ -320,7 +320,7 @@ static bool list_cluster_dir(uint16_t first_cluster, Fat16ListCallback callback,
         entry_count = g_cluster_size / sizeof(DirectoryEntry);
         for (i = 0; i < entry_count; ++i) {
             DirectoryEntry* entry = &entries[i];
-            FatDirEntry public_entry;
+            Fat16NodeInfo public_entry;
 
             if (entry->name[0] == 0x00)
                 return true;
@@ -329,7 +329,7 @@ static bool list_cluster_dir(uint16_t first_cluster, Fat16ListCallback callback,
             if (entry->name[0] == '.')
                 continue;
 
-            public_entry = to_public_entry(entry);
+            public_entry = decode_node_info(entry);
             if (!callback(&public_entry, context))
                 return true;
         }
@@ -340,14 +340,14 @@ static bool list_cluster_dir(uint16_t first_cluster, Fat16ListCallback callback,
     return true;
 }
 
-bool fat16_mount(const BootInfo* boot_info)
+bool fat16_mount(uint32_t partition_lba_start, uint16_t bytes_per_sector)
 {
     const BootSector* boot_sector;
     uint32_t fat_bytes;
 
-    if (boot_info == NULL || boot_info->bytes_per_sector != FAT16_SECTOR_SIZE)
+    if (bytes_per_sector != FAT16_SECTOR_SIZE)
         return false;
-    if (!read_sector(boot_info->partition_lba_start, g_sector_buffer))
+    if (!read_sector(partition_lba_start, g_sector_buffer))
         return false;
     boot_sector = (const BootSector*)g_sector_buffer;
     if (boot_sector->bytes_per_sector != FAT16_SECTOR_SIZE)
@@ -357,7 +357,7 @@ bool fat16_mount(const BootInfo* boot_info)
     if (boot_sector->sectors_per_cluster == 0 || boot_sector->sectors_per_cluster > FAT16_MAX_CLUSTER_SECTORS)
         return false;
 
-    g_partition_lba = boot_info->partition_lba_start;
+    g_partition_lba = partition_lba_start;
     g_bytes_per_sector = boot_sector->bytes_per_sector;
     g_sectors_per_cluster = boot_sector->sectors_per_cluster;
     g_root_entry_count = boot_sector->dir_entry_count;
@@ -367,7 +367,7 @@ bool fat16_mount(const BootInfo* boot_info)
     g_cluster_size = (uint32_t)g_sectors_per_cluster * g_bytes_per_sector;
 
     fat_bytes = (uint32_t)boot_sector->sectors_per_fat * g_bytes_per_sector;
-    if (!ata_read_sectors(g_partition_lba + boot_sector->reserved_sectors, (uint8_t)boot_sector->sectors_per_fat, g_fat))
+    if (!block_read_sectors(g_partition_lba + boot_sector->reserved_sectors, (uint8_t)boot_sector->sectors_per_fat, g_fat))
         return false;
 
     k_memset(g_sector_buffer, 0, sizeof(g_sector_buffer));
@@ -377,7 +377,7 @@ bool fat16_mount(const BootInfo* boot_info)
     return true;
 }
 
-bool fat16_stat(const char* path, FatDirEntry* out)
+bool fat16_stat(const char* path, Fat16NodeInfo* out)
 {
     ResolvedPath resolved;
 
@@ -393,7 +393,7 @@ bool fat16_stat(const char* path, FatDirEntry* out)
         out->is_dir = true;
         out->size = 0;
     } else {
-        *out = to_public_entry(&resolved.entry);
+        *out = decode_node_info(&resolved.entry);
     }
 
     return true;

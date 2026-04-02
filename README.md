@@ -16,6 +16,11 @@ The current boot chain is:
 - Hands a minimal `BootInfo` structure from the loader to the kernel
 - Uses runtime `ATA PIO` reads in protected mode
 - Mounts the disk as read-only `FAT16` inside the kernel
+- Splits runtime storage and shell logic into:
+  - `block` for boot-disk sector I/O
+  - `fs` for shell-facing filesystem access
+  - `fat16` as the read-only FAT16 driver
+  - `path` for canonical absolute-path handling
 - Provides a built-in shell with:
   - `help`
   - `ls [path]`
@@ -115,6 +120,8 @@ make test
 
 The smoke test covers:
 - host-side FAT16 image inspection with the repo tool
+- host-side path normalization checks
+- layering checks that the shell uses `fs`, not `fat16`, directly
 - normal QEMU boot to the shell prompt
 - shell command execution over serial
 - runtime reads of subdirectory and multi-cluster FAT16 data

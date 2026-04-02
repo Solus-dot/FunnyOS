@@ -23,6 +23,7 @@ KERNEL_ASM_OBJS := $(patsubst $(SRC_DIR)/kernel/%.asm,$(BUILD_DIR)/kernel/%.o,$(
 
 IMG_TOOL := $(BUILD_DIR)/tools/imgbuild
 FAT_TOOL := $(BUILD_DIR)/tools/fat
+PATH_TEST_TOOL := $(BUILD_DIR)/tools/path_test
 
 ROOT_TEST_FILE := test.txt
 DEMO_TEST_FILE := test.txt
@@ -41,7 +42,11 @@ run: check-run-tools $(BUILD_DIR)/funnyos-disk.img
 debug: check-run-tools $(BUILD_DIR)/funnyos-disk.img
 	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/funnyos-disk.img,if=ide -serial stdio -monitor none -s -S
 
-test: image $(FAT_TOOL)
+test: image $(FAT_TOOL) $(PATH_TEST_TOOL)
+	$(PATH_TEST_TOOL)
+	grep -F '#include "fs.h"' $(SRC_DIR)/kernel/shell.c >/dev/null
+	if grep -F '#include "fat16.h"' $(SRC_DIR)/kernel/shell.c >/dev/null; then echo "shell still depends on fat16.h"; exit 1; fi
+	if grep -F 'fat16_' $(SRC_DIR)/kernel/shell.c >/dev/null; then echo "shell still calls fat16 directly"; exit 1; fi
 	sh tests/smoke.sh "$(BUILD_DIR)/funnyos-disk.img" "$(QEMU)" "$(IMG_TOOL)" "$(FAT_TOOL)" "$(BUILD_DIR)/mbr.bin" "$(BUILD_DIR)/stage1.bin" "$(BUILD_DIR)/stage2.bin" "$(BUILD_DIR)/kernel.bin" "$(ROOT_TEST_FILE)" "$(DEMO_TEST_FILE)"
 
 check-build-tools:
@@ -84,6 +89,9 @@ $(IMG_TOOL): tools/imgbuild/imgbuild.c | $(BUILD_DIR)/tools
 
 $(FAT_TOOL): tools/fat/fat.c | $(BUILD_DIR)/tools
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror tools/fat/fat.c -o $@
+
+$(PATH_TEST_TOOL): tests/path_test.c $(SRC_DIR)/kernel/path.c $(SRC_DIR)/kernel/kstring.c | $(BUILD_DIR)/tools
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I$(SRC_DIR)/common -I$(SRC_DIR)/kernel tests/path_test.c $(SRC_DIR)/kernel/path.c $(SRC_DIR)/kernel/kstring.c -o $@
 
 $(BUILD_DIR):
 	mkdir -p $@
