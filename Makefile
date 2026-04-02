@@ -1,63 +1,94 @@
-ASM=nasm
-CC=gcc
-CC16=/user/bin/watcom/binl64/wcc
-LD16=/user/bin/watcom/binl64/wlink
+ASM ?= nasm
+HOST_CC ?= gcc
+QEMU ?= qemu-system-i386
 
-SRC_DIR=src
-TOOLS_DIR=tools
-BUILD_DIR=build
+CROSS_PREFIX ?= $(shell if command -v i686-elf-gcc >/dev/null 2>&1; then printf 'i686-elf-'; elif command -v i386-elf-gcc >/dev/null 2>&1; then printf 'i386-elf-'; fi)
+CROSS_GCC := $(CROSS_PREFIX)gcc
+CROSS_LD := $(CROSS_PREFIX)ld
+CROSS_OBJCOPY := $(CROSS_PREFIX)objcopy
 
-.PHONY: all floppy_image kernel bootloader clean always tools_fat
+BUILD_DIR := build
+SRC_DIR := src
 
-all: floppy_image tools_fat
+STAGE1_SRC := $(SRC_DIR)/boot/stage1/boot.asm
+STAGE2_SRC := $(SRC_DIR)/boot/stage2/stage2.asm
+KERNEL_LD_SCRIPT := $(SRC_DIR)/kernel/linker.ld
 
-# Floppy Image
-floppy_image: $(BUILD_DIR)/main_floppy.img
+KERNEL_C_SRCS := $(SRC_DIR)/kernel/kmain.c
+KERNEL_ASM_SRCS := $(SRC_DIR)/kernel/entry.asm
 
-$(BUILD_DIR)/main_floppy.img: bootloader kernel
-	dd if=/dev/zero of=$(BUILD_DIR)/main_floppy.img bs=512 count=2880
-	mkfs.fat -F 12 -n "FNOS" $(BUILD_DIR)/main_floppy.img
-	dd if=$(BUILD_DIR)/stage1.bin of=$(BUILD_DIR)/main_floppy.img conv=notrunc
-	mcopy -i $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/stage2.bin "::stage2.bin"
-	mcopy -i $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/kernel.bin "::kernel.bin"
-	mcopy -i $(BUILD_DIR)/main_floppy.img test.txt "::test.txt"
-	
-	# Adding a Subdirectory mydir
-	mmd -i $(BUILD_DIR)/main_floppy.img "::mydir"		
-	mcopy -i $(BUILD_DIR)/main_floppy.img test.txt "::mydir/test.txt"
+KERNEL_C_OBJS := $(patsubst $(SRC_DIR)/kernel/%.c,$(BUILD_DIR)/kernel/%.o,$(KERNEL_C_SRCS))
+KERNEL_ASM_OBJS := $(patsubst $(SRC_DIR)/kernel/%.asm,$(BUILD_DIR)/kernel/%.o,$(KERNEL_ASM_SRCS))
 
-# Bootloader
-bootloader: stage1 stage2
+IMG_TOOL := $(BUILD_DIR)/tools/imgbuild
+FAT_TOOL := $(BUILD_DIR)/tools/fat
 
-stage1: $(BUILD_DIR)/stage1.bin
+ROOT_TEST_FILE := test.txt
+DEMO_TEST_FILE := test.txt
 
-$(BUILD_DIR)/stage1.bin: always
-	$(MAKE) -C $(SRC_DIR)/bootloader/stage1 BUILD_DIR=$(abspath $(BUILD_DIR))
+KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common
 
-stage2: $(BUILD_DIR)/stage2.bin
+.PHONY: all image run debug test clean check-build-tools check-run-tools
 
-$(BUILD_DIR)/stage2.bin: always
-	$(MAKE) -C $(SRC_DIR)/bootloader/stage2 BUILD_DIR=$(abspath $(BUILD_DIR))
+all: image
 
-# Kernel
-kernel: $(BUILD_DIR)/kernel.bin
+image: check-build-tools $(BUILD_DIR)/main_floppy.img
 
-$(BUILD_DIR)/kernel.bin: always
-	$(MAKE) -C $(SRC_DIR)/kernel BUILD_DIR=$(abspath $(BUILD_DIR))
+run: check-run-tools $(BUILD_DIR)/main_floppy.img
+	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/main_floppy.img,if=floppy -serial stdio
 
-# Tools
-tools_fat: $(BUILD_DIR)/tools/fat
-$(BUILD_DIR)/tools/fat: always $(TOOLS_DIR)/fat/fat.c
-	mkdir -p $(BUILD_DIR)/tools
-	$(CC) -g -o $(BUILD_DIR)/tools/fat $(TOOLS_DIR)/fat/fat.c
+debug: check-run-tools $(BUILD_DIR)/main_floppy.img
+	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/main_floppy.img,if=floppy -serial stdio -monitor none -s -S
 
-# Always
-always:
-	mkdir -p $(BUILD_DIR)
+test: image $(FAT_TOOL)
+	sh tests/smoke.sh "$(BUILD_DIR)/main_floppy.img" "$(QEMU)" "$(IMG_TOOL)" "$(FAT_TOOL)" "$(BUILD_DIR)/stage1.bin" "$(BUILD_DIR)/stage2.bin" "$(BUILD_DIR)/kernel.bin" "$(ROOT_TEST_FILE)" "$(DEMO_TEST_FILE)"
 
-# Clean
+check-build-tools:
+	@command -v $(ASM) >/dev/null || { echo "Missing tool: $(ASM)"; exit 1; }
+	@command -v $(HOST_CC) >/dev/null || { echo "Missing tool: $(HOST_CC)"; exit 1; }
+	@test -n "$(CROSS_PREFIX)" || { echo "Missing cross toolchain: install i686-elf-gcc or i386-elf-gcc"; exit 1; }
+	@command -v $(CROSS_GCC) >/dev/null || { echo "Missing tool: $(CROSS_GCC)"; exit 1; }
+	@command -v $(CROSS_LD) >/dev/null || { echo "Missing tool: $(CROSS_LD)"; exit 1; }
+	@command -v $(CROSS_OBJCOPY) >/dev/null || { echo "Missing tool: $(CROSS_OBJCOPY)"; exit 1; }
+
+check-run-tools: check-build-tools
+	@command -v $(QEMU) >/dev/null || { echo "Missing tool: $(QEMU)"; exit 1; }
+
+$(BUILD_DIR)/main_floppy.img: $(BUILD_DIR)/stage1.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin $(IMG_TOOL) $(ROOT_TEST_FILE) $(DEMO_TEST_FILE)
+	$(IMG_TOOL) $@ $(BUILD_DIR)/stage1.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin $(ROOT_TEST_FILE) $(DEMO_TEST_FILE)
+
+$(BUILD_DIR)/stage1.bin: $(STAGE1_SRC) | $(BUILD_DIR)
+	$(ASM) -f bin $< -o $@
+
+$(BUILD_DIR)/stage2.bin: $(STAGE2_SRC) | $(BUILD_DIR)
+	$(ASM) -f bin $< -o $@
+
+$(BUILD_DIR)/kernel.elf: $(KERNEL_C_OBJS) $(KERNEL_ASM_OBJS) $(KERNEL_LD_SCRIPT)
+	$(CROSS_LD) -T $(KERNEL_LD_SCRIPT) -o $@ $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
+
+$(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
+	$(CROSS_OBJCOPY) -O binary $< $@
+
+$(BUILD_DIR)/kernel/%.o: $(SRC_DIR)/kernel/%.c | $(BUILD_DIR)/kernel
+	$(CROSS_GCC) $(KERNEL_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/%.o: $(SRC_DIR)/kernel/%.asm | $(BUILD_DIR)/kernel
+	$(ASM) -f elf32 $< -o $@
+
+$(IMG_TOOL): tools/imgbuild/imgbuild.c | $(BUILD_DIR)/tools
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror tools/imgbuild/imgbuild.c -o $@
+
+$(FAT_TOOL): tools/fat/fat.c | $(BUILD_DIR)/tools
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror tools/fat/fat.c -o $@
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+$(BUILD_DIR)/kernel:
+	mkdir -p $@
+
+$(BUILD_DIR)/tools:
+	mkdir -p $@
+
 clean:
-	$(MAKE) -C $(SRC_DIR)/bootloader/stage1 BUILD_DIR=$(abspath $(BUILD_DIR)) clean
-	$(MAKE) -C $(SRC_DIR)/bootloader/stage2 BUILD_DIR=$(abspath $(BUILD_DIR)) clean
-	$(MAKE) -C $(SRC_DIR)/kernel BUILD_DIR=$(abspath $(BUILD_DIR)) clean
-	rm -rf $(BUILD_DIR)/*
+	rm -rf $(BUILD_DIR)

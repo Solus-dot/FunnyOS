@@ -1,1 +1,3 @@
-qemu-system-i386 -fda build/main_floppy.img
+#!/bin/sh
+set -eu
+exec make run

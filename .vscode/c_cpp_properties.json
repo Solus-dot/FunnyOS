@@ -1,18 +1,16 @@
 {
     "configurations": [
         {
-            "name": "Watcom",
+            "name": "FunnyOS Cross",
             "includePath": [
-                "/home/solus/FunnyOS/**"
+                "${workspaceFolder}/src/common/**",
+                "${workspaceFolder}/src/kernel/**"
             ],
-            "defines": [
-                "_cdecl="
-            ],
-            "compilerPath": "/usr/bin/watcom/binl64/wcc",
-            "cStandard": "c99",
+            "compilerPath": "i686-elf-gcc",
+            "cStandard": "c11",
             "cppStandard": "c++17",
             "intelliSenseMode": "linux-clang-x64",
-            "compilerPathInCppPropertiesJson": "/usr/bin/watcom/binl64/wcc",
+            "compilerPathInCppPropertiesJson": "i686-elf-gcc",
             "mergeConfigurations": false,
             "recursiveIncludes": {
                 "reduce": "default",
@@ -23,7 +21,9 @@
                 "limitSymbolsToIncludedHeaders": true
             },
             "compilerArgs": [
-                "-4 -d3 -s -wx -ms -zl -zq"
+                "-ffreestanding",
+                "-fno-pie",
+                "-fno-stack-protector"
             ]
         }
     ],

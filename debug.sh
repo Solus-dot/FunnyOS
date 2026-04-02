@@ -1,1 +1,3 @@
-bochs -f bochs_config
+#!/bin/sh
+set -eu
+exec make debug
