@@ -1,5 +1,6 @@
 #include "program.h"
 #include "../common/program_api.h"
+#include "../common/program_format.h"
 #include "console.h"
 #include "fs.h"
 #include "keyboard.h"
@@ -10,7 +11,8 @@
 #define PROGRAM_EXTENSION_LEN 4u
 #define PROGRAM_LOAD_ADDR 0x00200000u
 #define PROGRAM_STACK_TOP 0x00210000u
-#define PROGRAM_MAX_SIZE 65536u
+#define PROGRAM_MAX_MEMORY_SIZE 65536u
+#define PROGRAM_MAX_FILE_SIZE (PROGRAM_MAX_MEMORY_SIZE + (uint32_t)PROGRAM_HEADER_SIZE)
 #define PROGRAM_MAX_ARGS 8u
 #define PROGRAM_ARG_BUFFER_SIZE 256u
 
@@ -28,6 +30,7 @@ static ProgramInfo g_program_info;
 static char g_program_cwd[PATH_CAPACITY];
 static char g_program_arg_buffer[PROGRAM_ARG_BUFFER_SIZE];
 static uint32_t g_program_argv[PROGRAM_MAX_ARGS];
+static uint8_t g_program_file_buffer[PROGRAM_MAX_FILE_SIZE];
 static uint32_t g_program_exit_status = 0;
 static bool g_program_exit_requested = false;
 
@@ -181,43 +184,77 @@ static bool tokenize_args(const char* command, const char* argument_line)
     return true;
 }
 
-static bool program_load_binary(const char* path, uint32_t* size_out)
+static bool program_validate_header(uint32_t file_size, uint32_t* entry_point_out)
+{
+    const ProgramHeader* header = (const ProgramHeader*)g_program_file_buffer;
+    uint8_t* program_dst = (uint8_t*)(uintptr_t)PROGRAM_LOAD_ADDR;
+
+    if (file_size < PROGRAM_HEADER_SIZE) {
+        console_write_line("invalid program");
+        return false;
+    }
+    if (header->magic != PROGRAM_HEADER_MAGIC
+        || header->version != PROGRAM_HEADER_VERSION
+        || header->header_size != PROGRAM_HEADER_SIZE
+        || header->flags != PROGRAM_HEADER_FLAGS_NONE) {
+        console_write_line("invalid program");
+        return false;
+    }
+    if (header->image_size == 0u || header->entry_offset >= header->image_size) {
+        console_write_line("invalid program");
+        return false;
+    }
+    if ((uint32_t)header->header_size > file_size || header->image_size != file_size - (uint32_t)header->header_size) {
+        console_write_line("invalid program");
+        return false;
+    }
+    if (header->image_size > PROGRAM_MAX_MEMORY_SIZE || header->bss_size > PROGRAM_MAX_MEMORY_SIZE - header->image_size) {
+        console_write_line("program too large");
+        return false;
+    }
+
+    k_memset(program_dst, 0, PROGRAM_MAX_MEMORY_SIZE);
+    k_memcpy(program_dst, g_program_file_buffer + header->header_size, header->image_size);
+    *entry_point_out = PROGRAM_LOAD_ADDR + header->entry_offset;
+    return true;
+}
+
+static bool program_load_binary(const char* path, uint32_t* entry_point_out)
 {
     FsNodeInfo node;
     ProgramLoadContext load_context;
 
     if (fs_stat(path, &node) != FS_OK)
         return false;
-    if (node.type != FS_NODE_FILE || node.size == 0u) {
+    if (node.type != FS_NODE_FILE) {
         console_write_line("program load failed");
         return false;
     }
-    if (node.size > PROGRAM_MAX_SIZE) {
+    if (node.size > PROGRAM_MAX_FILE_SIZE) {
         console_write_line("program too large");
         return false;
     }
 
-    load_context.dst = (uint8_t*)(uintptr_t)PROGRAM_LOAD_ADDR;
-    load_context.capacity = PROGRAM_MAX_SIZE;
+    load_context.dst = g_program_file_buffer;
+    load_context.capacity = PROGRAM_MAX_FILE_SIZE;
     load_context.size = 0;
-    k_memset(load_context.dst, 0, PROGRAM_MAX_SIZE);
+    k_memset(load_context.dst, 0, PROGRAM_MAX_FILE_SIZE);
 
     if (fs_read_file(path, program_file_chunk_copy, &load_context) != FS_OK) {
         console_write_line("program load failed");
         return false;
     }
-    if (load_context.size != node.size || load_context.size == 0u) {
+    if (load_context.size != node.size) {
         console_write_line("program load failed");
         return false;
     }
 
-    *size_out = load_context.size;
-    return true;
+    return program_validate_header(load_context.size, entry_point_out);
 }
 
 static bool program_run_path(const char* path, const char* command, const char* argument_line, const char* cwd)
 {
-    uint32_t size_ignored;
+    uint32_t entry_point;
     uint32_t invoke_result;
 
     if (!tokenize_args(command, argument_line)) {
@@ -226,13 +263,13 @@ static bool program_run_path(const char* path, const char* command, const char* 
     }
 
     k_strcpy(g_program_cwd, cwd);
-    if (!program_load_binary(path, &size_ignored))
+    if (!program_load_binary(path, &entry_point))
         return false;
 
     g_program_exit_requested = false;
     g_program_exit_status = 0;
     invoke_result = program_invoke(
-        PROGRAM_LOAD_ADDR,
+        entry_point,
         (uint32_t)(uintptr_t)&g_program_api,
         (uint32_t)(uintptr_t)&g_program_info,
         PROGRAM_STACK_TOP);

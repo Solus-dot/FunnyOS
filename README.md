@@ -41,6 +41,7 @@ It also supports:
 - case-insensitive FAT 8.3 lookup
 - multi-cluster files and directories
 - flat-binary program loading from the FAT16 disk image
+- header-validated FunnyOS executables with a tiny custom file format
 - a tiny syscall-style program ABI for output, input, and exit
 
 ## Project Status
@@ -71,7 +72,7 @@ The current runtime stack is split like this:
 - `fs`: filesystem-facing kernel API used by the shell
 - `fat16`: FAT16 driver behind the `fs` API
 - `path`: canonical path normalization for shell and filesystem access
-- `program`: flat-binary loader plus tiny kernel-owned program ABI
+- `program`: header-validated executable loader plus tiny kernel-owned program ABI
 - `shell`: user-facing command loop and dispatcher
 
 This keeps the shell from depending directly on FAT16 internals and makes future milestones easier to implement.
@@ -81,10 +82,11 @@ This keeps the shell from depending directly on FAT16 internals and makes future
 FunnyOS can now run tiny external programs stored as ordinary FAT16 files.
 
 The current model is intentionally small:
-- programs are raw flat binaries, not ELF executables
+- programs use a tiny FunnyOS executable header instead of raw bytes or ELF
 - they are loaded at a fixed address into the same address space as the kernel
 - there is no memory protection, multitasking, or process isolation yet
 - programs return control to the shell through a tiny kernel ABI
+- malformed or oversized program files are rejected before execution
 
 Right now the ABI exposes only a few essentials:
 - write text to the console/serial output
@@ -125,7 +127,10 @@ This builds:
 - `build/stage2.bin`
 - `build/kernel.elf`
 - `build/kernel.bin`
+- `build/tools/programpack`
+- `build/programs/HELLO.payload`
 - `build/programs/HELLO.BIN`
+- `build/programs/ARGS.payload`
 - `build/programs/ARGS.BIN`
 - `build/funnyos-disk.img`
 
@@ -170,6 +175,7 @@ The test suite covers:
 - booting to the shell prompt in QEMU
 - shell command execution over serial
 - external program loading and return-to-shell behavior
+- header validation for malformed and oversized executables
 - writable file and directory mutations
 - multi-cluster file and directory reads
 - missing-kernel error handling

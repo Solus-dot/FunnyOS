@@ -6,6 +6,7 @@ CROSS_PREFIX ?= $(shell if command -v i686-elf-gcc >/dev/null 2>&1; then printf 
 CROSS_GCC := $(CROSS_PREFIX)gcc
 CROSS_LD := $(CROSS_PREFIX)ld
 CROSS_OBJCOPY := $(CROSS_PREFIX)objcopy
+CROSS_SIZE := $(CROSS_PREFIX)size
 
 BUILD_DIR := build
 SRC_DIR := src
@@ -32,13 +33,16 @@ PROGRAM_COMMON_ASM_OBJS := $(patsubst $(SRC_DIR)/programs/common/%.asm,$(BUILD_D
 HELLO_PROGRAM_OBJ := $(BUILD_DIR)/programs/hello/main.o
 ARGS_PROGRAM_OBJ := $(BUILD_DIR)/programs/args/main.o
 HELLO_PROGRAM_ELF := $(BUILD_DIR)/programs/HELLO.elf
+HELLO_PROGRAM_PAYLOAD := $(BUILD_DIR)/programs/HELLO.payload
 HELLO_PROGRAM_BIN := $(BUILD_DIR)/programs/HELLO.BIN
 ARGS_PROGRAM_ELF := $(BUILD_DIR)/programs/ARGS.elf
+ARGS_PROGRAM_PAYLOAD := $(BUILD_DIR)/programs/ARGS.payload
 ARGS_PROGRAM_BIN := $(BUILD_DIR)/programs/ARGS.BIN
 
 IMG_TOOL := $(BUILD_DIR)/tools/imgbuild
 FAT_TOOL := $(BUILD_DIR)/tools/fat
 PATH_TEST_TOOL := $(BUILD_DIR)/tools/path_test
+PROGRAM_PACK_TOOL := $(BUILD_DIR)/tools/programpack
 
 ROOT_TEST_FILE := test.txt
 DEMO_TEST_FILE := test.txt
@@ -58,12 +62,12 @@ run: check-run-tools $(BUILD_DIR)/funnyos-disk.img
 debug: check-run-tools $(BUILD_DIR)/funnyos-disk.img
 	$(QEMU) -drive format=raw,file=$(BUILD_DIR)/funnyos-disk.img,if=ide -serial stdio -monitor none -s -S
 
-test: image $(FAT_TOOL) $(PATH_TEST_TOOL)
+test: image $(FAT_TOOL) $(PATH_TEST_TOOL) $(PROGRAM_PACK_TOOL)
 	$(PATH_TEST_TOOL)
 	grep -F '#include "fs.h"' $(SRC_DIR)/kernel/shell.c >/dev/null
 	if grep -F '#include "fat16.h"' $(SRC_DIR)/kernel/shell.c >/dev/null; then echo "shell still depends on fat16.h"; exit 1; fi
 	if grep -F 'fat16_' $(SRC_DIR)/kernel/shell.c >/dev/null; then echo "shell still calls fat16 directly"; exit 1; fi
-	sh tests/smoke.sh "$(BUILD_DIR)/funnyos-disk.img" "$(QEMU)" "$(IMG_TOOL)" "$(FAT_TOOL)" "$(BUILD_DIR)/mbr.bin" "$(BUILD_DIR)/stage1.bin" "$(BUILD_DIR)/stage2.bin" "$(BUILD_DIR)/kernel.bin" "$(ROOT_TEST_FILE)" "$(DEMO_TEST_FILE)" "$(HELLO_PROGRAM_BIN)" "$(ARGS_PROGRAM_BIN)"
+	sh tests/smoke.sh "$(BUILD_DIR)/funnyos-disk.img" "$(QEMU)" "$(IMG_TOOL)" "$(FAT_TOOL)" "$(BUILD_DIR)/mbr.bin" "$(BUILD_DIR)/stage1.bin" "$(BUILD_DIR)/stage2.bin" "$(BUILD_DIR)/kernel.bin" "$(ROOT_TEST_FILE)" "$(DEMO_TEST_FILE)" "$(HELLO_PROGRAM_BIN)" "$(ARGS_PROGRAM_BIN)" "$(PROGRAM_PACK_TOOL)"
 
 check-build-tools:
 	@command -v $(ASM) >/dev/null || { echo "Missing tool: $(ASM)"; exit 1; }
@@ -72,6 +76,7 @@ check-build-tools:
 	@command -v $(CROSS_GCC) >/dev/null || { echo "Missing tool: $(CROSS_GCC)"; exit 1; }
 	@command -v $(CROSS_LD) >/dev/null || { echo "Missing tool: $(CROSS_LD)"; exit 1; }
 	@command -v $(CROSS_OBJCOPY) >/dev/null || { echo "Missing tool: $(CROSS_OBJCOPY)"; exit 1; }
+	@command -v $(CROSS_SIZE) >/dev/null || { echo "Missing tool: $(CROSS_SIZE)"; exit 1; }
 
 check-run-tools: check-build-tools
 	@command -v $(QEMU) >/dev/null || { echo "Missing tool: $(QEMU)"; exit 1; }
@@ -103,14 +108,15 @@ $(BUILD_DIR)/kernel/%.o: $(SRC_DIR)/kernel/%.asm | $(BUILD_DIR)/kernel
 $(HELLO_PROGRAM_ELF): $(PROGRAM_COMMON_C_OBJS) $(PROGRAM_COMMON_ASM_OBJS) $(HELLO_PROGRAM_OBJ) $(PROGRAM_LD_SCRIPT)
 	$(CROSS_LD) -T $(PROGRAM_LD_SCRIPT) -o $@ $(PROGRAM_COMMON_ASM_OBJS) $(PROGRAM_COMMON_C_OBJS) $(HELLO_PROGRAM_OBJ)
 
-$(HELLO_PROGRAM_BIN): $(HELLO_PROGRAM_ELF)
-	$(CROSS_OBJCOPY) -O binary $< $@
-
 $(ARGS_PROGRAM_ELF): $(PROGRAM_COMMON_C_OBJS) $(PROGRAM_COMMON_ASM_OBJS) $(ARGS_PROGRAM_OBJ) $(PROGRAM_LD_SCRIPT)
 	$(CROSS_LD) -T $(PROGRAM_LD_SCRIPT) -o $@ $(PROGRAM_COMMON_ASM_OBJS) $(PROGRAM_COMMON_C_OBJS) $(ARGS_PROGRAM_OBJ)
 
-$(ARGS_PROGRAM_BIN): $(ARGS_PROGRAM_ELF)
+$(BUILD_DIR)/programs/%.payload: $(BUILD_DIR)/programs/%.elf
 	$(CROSS_OBJCOPY) -O binary $< $@
+
+$(BUILD_DIR)/programs/%.BIN: $(BUILD_DIR)/programs/%.payload $(BUILD_DIR)/programs/%.elf $(PROGRAM_PACK_TOOL) Makefile
+	bss_size=`$(CROSS_SIZE) -A -d $(BUILD_DIR)/programs/$*.elf | awk '$$1==".bss" {sum+=$$2} END {print sum+0}'`; \
+	$(PROGRAM_PACK_TOOL) pack $(BUILD_DIR)/programs/$*.payload $@ 0 $$bss_size
 
 $(BUILD_DIR)/programs/common/%.o: $(SRC_DIR)/programs/common/%.c | $(BUILD_DIR)/programs/common
 	$(CROSS_GCC) $(PROGRAM_CFLAGS) -c $< -o $@
@@ -132,6 +138,9 @@ $(FAT_TOOL): tools/fat/fat.c | $(BUILD_DIR)/tools
 
 $(PATH_TEST_TOOL): tests/path_test.c $(SRC_DIR)/kernel/path.c $(SRC_DIR)/kernel/kstring.c | $(BUILD_DIR)/tools
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I$(SRC_DIR)/common -I$(SRC_DIR)/kernel tests/path_test.c $(SRC_DIR)/kernel/path.c $(SRC_DIR)/kernel/kstring.c -o $@
+
+$(PROGRAM_PACK_TOOL): tools/programpack/programpack.c $(SRC_DIR)/common/program_format.h | $(BUILD_DIR)/tools
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I$(SRC_DIR)/common tools/programpack/programpack.c -o $@
 
 $(BUILD_DIR):
 	mkdir -p $@
