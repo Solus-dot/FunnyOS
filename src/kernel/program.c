@@ -9,14 +9,14 @@
 
 #define PROGRAM_EXTENSION ".BIN"
 #define PROGRAM_EXTENSION_LEN 4u
-#define PROGRAM_LOAD_ADDR 0x00200000u
-#define PROGRAM_STACK_TOP 0x00210000u
+#define PROGRAM_LOAD_ADDR ((uintptr_t)0x0000000000800000ull)
+#define PROGRAM_STACK_TOP ((uintptr_t)0x0000000000900000ull)
 #define PROGRAM_MAX_MEMORY_SIZE 65536u
 #define PROGRAM_MAX_FILE_SIZE (PROGRAM_MAX_MEMORY_SIZE + (uint32_t)PROGRAM_HEADER_SIZE)
 #define PROGRAM_MAX_ARGS 8u
 #define PROGRAM_ARG_BUFFER_SIZE 256u
 
-extern uint32_t program_invoke(uint32_t entry_point, uint32_t api_ptr, uint32_t info_ptr, uint32_t stack_top);
+extern uint64_t program_invoke(uintptr_t entry_point, uintptr_t api_ptr, uintptr_t info_ptr, uintptr_t stack_top);
 extern void program_exit_resume(void);
 
 typedef struct ProgramLoadContext {
@@ -29,12 +29,12 @@ static ProgramApi g_program_api;
 static ProgramInfo g_program_info;
 static char g_program_cwd[PATH_CAPACITY];
 static char g_program_arg_buffer[PROGRAM_ARG_BUFFER_SIZE];
-static uint32_t g_program_argv[PROGRAM_MAX_ARGS];
+static uintptr_t g_program_argv[PROGRAM_MAX_ARGS];
 static uint8_t g_program_file_buffer[PROGRAM_MAX_FILE_SIZE];
 static uint32_t g_program_exit_status = 0;
 static bool g_program_exit_requested = false;
 
-static void program_api_write(const char* data, uint32_t len)
+static void program_api_write(const char* data, size_t len)
 {
     if (data == NULL)
         return;
@@ -42,7 +42,7 @@ static void program_api_write(const char* data, uint32_t len)
     console_write_n(data, len);
 }
 
-static uint32_t program_api_read_line(char* buf, uint32_t cap)
+static size_t program_api_read_line(char* buf, size_t cap)
 {
     if (buf == NULL)
         return 0;
@@ -55,6 +55,7 @@ static void program_api_exit(uint32_t status)
     g_program_exit_requested = true;
     g_program_exit_status = status;
     __asm__ volatile("jmp program_exit_resume");
+    __builtin_unreachable();
 }
 
 static void program_init_api(void)
@@ -122,7 +123,7 @@ static bool path_has_program_suffix(const char* path)
 static bool build_lookup_path(const char* base, const char* command, char* out, uint32_t capacity)
 {
     char with_extension[PATH_CAPACITY];
-    uint32_t command_len = k_strlen(command);
+    uint32_t command_len = (uint32_t)k_strlen(command);
 
     if (command_len + PROGRAM_EXTENSION_LEN + 1u > sizeof(with_extension))
         return false;
@@ -135,7 +136,7 @@ static bool build_lookup_path(const char* base, const char* command, char* out, 
 static bool tokenize_args(const char* command, const char* argument_line)
 {
     const char* cursor;
-    uint32_t argc = 0;
+    size_t argc = 0;
     uint32_t offset = 0;
 
     k_memset(g_program_arg_buffer, 0, sizeof(g_program_arg_buffer));
@@ -151,7 +152,7 @@ static bool tokenize_args(const char* command, const char* argument_line)
         g_program_arg_buffer[offset++] = *cursor++;
     }
     g_program_arg_buffer[offset++] = '\0';
-    g_program_argv[argc++] = (uint32_t)(uintptr_t)g_program_arg_buffer;
+    g_program_argv[argc++] = (uintptr_t)g_program_arg_buffer;
 
     cursor = argument_line;
     if (cursor == NULL)
@@ -174,20 +175,21 @@ static bool tokenize_args(const char* command, const char* argument_line)
             g_program_arg_buffer[offset++] = *cursor++;
         }
         g_program_arg_buffer[offset++] = '\0';
-        g_program_argv[argc++] = (uint32_t)(uintptr_t)(g_program_arg_buffer + arg_start);
+        g_program_argv[argc++] = (uintptr_t)(g_program_arg_buffer + arg_start);
     }
 
     g_program_info.magic = PROGRAM_INFO_MAGIC;
+    g_program_info.reserved = 0u;
     g_program_info.argc = argc;
-    g_program_info.argv_addr = (uint32_t)(uintptr_t)g_program_argv;
-    g_program_info.cwd_addr = (uint32_t)(uintptr_t)g_program_cwd;
+    g_program_info.argv_addr = (uintptr_t)g_program_argv;
+    g_program_info.cwd_addr = (uintptr_t)g_program_cwd;
     return true;
 }
 
-static bool program_validate_header(uint32_t file_size, uint32_t* entry_point_out)
+static bool program_validate_header(uint32_t file_size, uintptr_t* entry_point_out)
 {
     const ProgramHeader* header = (const ProgramHeader*)g_program_file_buffer;
-    uint8_t* program_dst = (uint8_t*)(uintptr_t)PROGRAM_LOAD_ADDR;
+    uint8_t* program_dst = (uint8_t*)PROGRAM_LOAD_ADDR;
 
     if (file_size < PROGRAM_HEADER_SIZE) {
         console_write_line("invalid program");
@@ -219,7 +221,7 @@ static bool program_validate_header(uint32_t file_size, uint32_t* entry_point_ou
     return true;
 }
 
-static bool program_load_binary(const char* path, uint32_t* entry_point_out)
+static bool program_load_binary(const char* path, uintptr_t* entry_point_out)
 {
     FsNodeInfo node;
     ProgramLoadContext load_context;
@@ -254,8 +256,8 @@ static bool program_load_binary(const char* path, uint32_t* entry_point_out)
 
 static bool program_run_path(const char* path, const char* command, const char* argument_line, const char* cwd)
 {
-    uint32_t entry_point;
-    uint32_t invoke_result;
+    uintptr_t entry_point;
+    uint64_t invoke_result;
 
     if (!tokenize_args(command, argument_line)) {
         console_write_line("program load failed");
@@ -270,8 +272,8 @@ static bool program_run_path(const char* path, const char* command, const char* 
     g_program_exit_status = 0;
     invoke_result = program_invoke(
         entry_point,
-        (uint32_t)(uintptr_t)&g_program_api,
-        (uint32_t)(uintptr_t)&g_program_info,
+        (uintptr_t)&g_program_api,
+        (uintptr_t)&g_program_info,
         PROGRAM_STACK_TOP);
 
     if (invoke_result == 0u) {

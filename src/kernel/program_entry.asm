@@ -1,28 +1,27 @@
-[BITS 32]
+[BITS 64]
 
 global program_invoke
 global program_exit_resume
 
 section .bss
-align 4
-program_resume_esp:
-    resd 1
+align 8
+program_resume_rsp:
+    resq 1
 
 section .text
 program_invoke:
-    push ebp
-    mov ebp, esp
-    push ebx
-    push esi
-    push edi
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push r12
 
-    mov [program_resume_esp], esp
+    mov [rel program_resume_rsp], rsp
 
-    mov esi, [ebp + 8]
-    mov eax, [ebp + 12]
-    mov ebx, [ebp + 16]
-    mov esp, [ebp + 20]
-    call esi
+    mov r12, rdi
+    mov rdi, rsi
+    mov rsi, rdx
+    mov rsp, rcx
+    call r12
     xor eax, eax
     jmp program_restore
 
@@ -30,9 +29,8 @@ program_exit_resume:
     mov eax, 1
 
 program_restore:
-    mov esp, [program_resume_esp]
-    pop edi
-    pop esi
-    pop ebx
-    pop ebp
+    mov rsp, [rel program_resume_rsp]
+    pop r12
+    pop rbx
+    pop rbp
     ret

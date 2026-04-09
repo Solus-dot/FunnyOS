@@ -13,7 +13,7 @@ The focus right now is not "do everything," but "do the fundamentals cleanly":
 Today, FunnyOS can:
 - boot from a generated hard-disk image using `MBR -> stage1 -> stage2 -> kernel`
 - load `STAGE2.BIN` and `KERNEL.BIN` from a FAT16 partition
-- switch into 32-bit protected mode
+- switch into 64-bit long mode
 - access the boot disk at runtime using ATA PIO
 - mount a writable FAT16 filesystem inside the kernel
 - provide a small shell with built-ins and external flat-binary programs
@@ -67,7 +67,7 @@ That also means it is still intentionally limited:
 The current runtime stack is split like this:
 - `mbr`: tiny BIOS MBR that finds the active partition and loads the partition boot sector
 - `stage1`: tiny FAT16 volume boot sector that loads `stage2` from image-builder metadata
-- `stage2`: real-mode loader that reads FAT16, loads the kernel, prepares `BootInfo`, and enters protected mode
+- `stage2`: real-mode loader that reads FAT16, loads the kernel, prepares `BootInfo`, and enters long mode
 - `block`: boot-disk sector I/O layer in the kernel
 - `fs`: filesystem-facing kernel API used by the shell
 - `fat16`: FAT16 driver behind the `fs` API
@@ -102,10 +102,9 @@ That is enough to move beyond a built-in-only shell without pretending this is a
 You need:
 - `nasm`
 - `make`
-- `qemu-system-i386`
+- `qemu-system-x86_64`
 - a GNU cross toolchain:
-  - `i686-elf-gcc`, `i686-elf-ld`, `i686-elf-objcopy`
-  - or `i386-elf-gcc`, `i386-elf-ld`, `i386-elf-objcopy`
+  - `x86_64-elf-gcc`, `x86_64-elf-ld`, `x86_64-elf-objcopy`
 - a host C compiler for repo tools:
   - `gcc` or compatible `cc`
 
@@ -209,7 +208,7 @@ The generated image is a fixed `64 MiB` raw disk with:
 - a FAT16 filesystem
 - the partition starting at LBA `2048`
 
-The kernel is linked at `0x00100000` and entered in 32-bit protected mode without paging.
+The kernel is linked at `0x00200000` and entered in 64-bit long mode with identity-mapped paging already enabled.
 
 ## Limitations
 

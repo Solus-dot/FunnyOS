@@ -1,4 +1,4 @@
-[BITS 32]
+[BITS 64]
 
 global _start
 extern g_program_api
@@ -7,16 +7,15 @@ extern program_main
 
 section .text
 _start:
-    mov [g_program_api], eax
-    mov [g_program_info], ebx
-    push ebx
-    push eax
+    mov [rel g_program_api], rdi
+    mov [rel g_program_info], rsi
+    sub rsp, 8
     call program_main
-    add esp, 8
+    add rsp, 8
 
-    mov ebx, [g_program_api]
-    push eax
-    call dword [ebx]
+    mov rbx, [rel g_program_api]
+    mov edi, eax
+    call qword [rbx]
 
 .halt:
     hlt

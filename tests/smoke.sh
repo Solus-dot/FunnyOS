@@ -37,7 +37,7 @@ assert_program_header() {
     header_dump=$("$PACK_TOOL" inspect "$program_path")
 
     printf '%s\n' "$header_dump" | grep -F "magic=0x31455846" >/dev/null
-    printf '%s\n' "$header_dump" | grep -F "version=1" >/dev/null
+    printf '%s\n' "$header_dump" | grep -F "version=2" >/dev/null
     printf '%s\n' "$header_dump" | grep -F "header_size=24" >/dev/null
     printf '%s\n' "$header_dump" | grep -E '^image_size=[1-9][0-9]*$' >/dev/null
     printf '%s\n' "$header_dump" | grep -F "bss_size=$expected_bss" >/dev/null
@@ -45,8 +45,8 @@ assert_program_header() {
     printf '%s\n' "$header_dump" | grep -F "flags=0" >/dev/null
 }
 
-assert_program_header "$HELLO_PROGRAM" 8
-assert_program_header "$ARGS_PROGRAM" 8
+assert_program_header "$HELLO_PROGRAM" 16
+assert_program_header "$ARGS_PROGRAM" 16
 
 "$FAT_TOOL" "$IMAGE" "MYDIR/TEST.TXT" | grep -F "Hello FunnyOS From a file, Solus here!!~~" >/dev/null
 "$FAT_TOOL" "$IMAGE" "BIGDIR" | grep -F "ITEM69.TXT" >/dev/null

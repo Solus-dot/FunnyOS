@@ -3,9 +3,9 @@
 const ProgramApi* g_program_api = (const ProgramApi*)0;
 const ProgramInfo* g_program_info = (const ProgramInfo*)0;
 
-uint32_t program_strlen(const char* s)
+size_t program_strlen(const char* s)
 {
-    uint32_t len = 0;
+    size_t len = 0;
 
     while (s[len] != '\0')
         ++len;
@@ -13,7 +13,7 @@ uint32_t program_strlen(const char* s)
     return len;
 }
 
-void program_write(const char* data, uint32_t len)
+void program_write(const char* data, size_t len)
 {
     g_program_api->write(data, len);
 }
@@ -48,7 +48,7 @@ void program_write_u32(uint32_t value)
         program_write(&digits[--count], 1);
 }
 
-uint32_t program_read_line(char* buf, uint32_t cap)
+size_t program_read_line(char* buf, size_t cap)
 {
     return g_program_api->read_line(buf, cap);
 }
