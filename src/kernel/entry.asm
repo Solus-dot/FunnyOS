@@ -1,4 +1,4 @@
-[BITS 32]
+[BITS 64]
 
 global _start
 extern kmain
@@ -8,12 +8,12 @@ extern __bss_end
 section .text
 _start:
     cli
-    mov esi, eax
+    mov rbx, rdi
     cld
     call clear_bss
-    mov esp, stack_top
+    mov rsp, stack_top
     call setup_platform
-    push esi
+    mov rdi, rbx
     call kmain
 
 .halt:
@@ -21,50 +21,65 @@ _start:
     jmp .halt
 
 clear_bss:
-    mov edi, __bss_start
-    mov ecx, __bss_end
-    sub ecx, edi
+    mov rdi, __bss_start
+    mov rcx, __bss_end
+    sub rcx, rdi
     xor eax, eax
-    shr ecx, 2
-    rep stosd
+    rep stosb
     ret
 
 setup_platform:
+    mov rax, cr0
+    and rax, ~0x4
+    or rax, 0x2
+    mov cr0, rax
+
+    mov rax, cr4
+    or rax, 0x600
+    mov cr4, rax
+    fninit
+
     mov al, 0xFF
     out 0x21, al
     out 0xA1, al
 
-    mov eax, interrupt_stub
-    mov edx, eax
-    shr edx, 16
-    mov edi, idt_table
+    mov rax, interrupt_stub
+    mov rdx, rax
+    shr rdx, 16
+    mov r8, rax
+    shr r8, 32
+    lea rdi, [rel idt_table]
     mov ecx, 256
 
 .fill_idt:
-    mov word [edi], ax
-    mov word [edi + 2], 0x08
-    mov byte [edi + 4], 0
-    mov byte [edi + 5], 0x8E
-    mov word [edi + 6], dx
-    add edi, 8
+    mov word [rdi], ax
+    mov word [rdi + 2], CODE_SEL
+    mov byte [rdi + 4], 0
+    mov byte [rdi + 5], 0x8E
+    mov word [rdi + 6], dx
+    mov dword [rdi + 8], r8d
+    mov dword [rdi + 12], 0
+    add rdi, 16
     loop .fill_idt
 
-    lidt [idt_descriptor]
+    lidt [rel idt_descriptor]
     ret
 
 interrupt_stub:
-    iretd
+    iretq
 
 section .data
-align 8
+align 16
 idt_descriptor:
-    dw (256 * 8) - 1
-    dd idt_table
+    dw (256 * 16) - 1
+    dq idt_table
+
+CODE_SEL equ 0x08
 
 section .bss
 align 16
 idt_table:
-    resb 256 * 8
+    resb 256 * 16
 align 16
 stack_bottom:
     resb 16384

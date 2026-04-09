@@ -12,9 +12,12 @@
 %define STAGE2_LOAD_ADDR    0x00030000
 %define KERNEL_TEMP_ADDR    0x00050000
 %define DEMO_FILE_BUFFER    0x00070000
-%define KERNEL_LOAD_ADDR    0x00100000
+%define KERNEL_LOAD_ADDR    0x00200000
 %define RM_STACK_SEGMENT    0x7000
-%define PM_STACK_TOP        0x00090000
+%define LONG_STACK_TOP      0x00090000
+%define PML4_ADDR           0x00001000
+%define PDP_ADDR            0x00002000
+%define PD_ADDR             0x00003000
 
 %define BOOTINFO_MAGIC                   0x534F4E46
 %define BOOTINFO_MAGIC_OFF               0
@@ -103,7 +106,7 @@ start:
     jc kernel_read_error
     mov [kernel_size], eax
 
-    mov si, msg_pm
+    mov si, msg_lm
     call puts16
 
     cli
@@ -112,7 +115,7 @@ start:
     mov eax, cr0
     or eax, 1
     mov cr0, eax
-    jmp dword CODE_SEL:(STAGE2_LOAD_ADDR + protected_mode_entry)
+    jmp dword CODE32_SEL:(STAGE2_LOAD_ADDR + protected_mode_entry32)
 
 boot_error:
     mov si, msg_boot_error
@@ -753,60 +756,130 @@ enable_a20:
     ret
 
 [BITS 32]
-protected_mode_entry:
+protected_mode_entry32:
     mov ax, DATA_SEL
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, PM_STACK_TOP
+    mov esp, LONG_STACK_TOP
 
-    mov esi, KERNEL_TEMP_ADDR
-    mov edi, KERNEL_LOAD_ADDR
-    mov ecx, [STAGE2_LOAD_ADDR + kernel_size]
-    add ecx, 3
-    shr ecx, 2
+    call setup_page_tables
+
+    mov eax, cr4
+    or eax, 0x20
+    mov cr4, eax
+
+    mov eax, PML4_ADDR
+    mov cr3, eax
+
+    mov ecx, 0xC0000080
+    rdmsr
+    or eax, 0x00000100
+    wrmsr
+
+    mov eax, cr0
+    or eax, 0x80000000
+    mov cr0, eax
+    jmp CODE64_SEL:(STAGE2_LOAD_ADDR + long_mode_entry)
+
+setup_page_tables:
+    push eax
+    push ecx
+    push edx
+    push edi
+
+    mov edi, PML4_ADDR
+    xor eax, eax
+    mov ecx, (4096 * 3) / 4
     cld
-    rep movsd
+    rep stosd
 
-    mov dword [BOOTINFO_ADDR + BOOTINFO_MAGIC_OFF], BOOTINFO_MAGIC
-    mov al, [STAGE2_LOAD_ADDR + boot_drive]
-    mov [BOOTINFO_ADDR + BOOTINFO_BOOT_DRIVE_OFF], al
-    mov al, [STAGE2_LOAD_ADDR + boot_partition_index]
-    mov [BOOTINFO_ADDR + BOOTINFO_PARTITION_INDEX_OFF], al
-    mov ax, [STAGE2_LOAD_ADDR + bytes_per_sector]
-    mov [BOOTINFO_ADDR + BOOTINFO_BYTES_PER_SECTOR_OFF], ax
-    mov eax, [STAGE2_LOAD_ADDR + partition_lba_start]
-    mov [BOOTINFO_ADDR + BOOTINFO_PARTITION_LBA_OFF], eax
-    mov eax, [STAGE2_LOAD_ADDR + partition_sector_count]
-    mov [BOOTINFO_ADDR + BOOTINFO_PARTITION_COUNT_OFF], eax
-    mov word [BOOTINFO_ADDR + BOOTINFO_SCREEN_COLS_OFF], 80
-    mov word [BOOTINFO_ADDR + BOOTINFO_SCREEN_ROWS_OFF], 25
+    mov eax, PDP_ADDR | 0x03
+    mov dword [PML4_ADDR], eax
+    mov dword [PML4_ADDR + 4], 0
 
-    mov eax, BOOTINFO_ADDR
-    mov ebx, KERNEL_LOAD_ADDR
-    jmp ebx
+    mov eax, PD_ADDR | 0x03
+    mov dword [PDP_ADDR], eax
+    mov dword [PDP_ADDR + 4], 0
+
+    mov edi, PD_ADDR
+    xor eax, eax
+    mov ecx, 16
+
+.map_loop:
+    mov edx, eax
+    or edx, 0x83
+    mov dword [edi], edx
+    mov dword [edi + 4], 0
+    add eax, 0x200000
+    add edi, 8
+    loop .map_loop
+
+    pop edi
+    pop edx
+    pop ecx
+    pop eax
+    ret
+
+[BITS 64]
+[DEFAULT REL]
+long_mode_entry:
+    mov ax, DATA_SEL
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov rsp, LONG_STACK_TOP
+
+    mov rsi, KERNEL_TEMP_ADDR
+    mov rdi, KERNEL_LOAD_ADDR
+    mov ecx, dword [rel kernel_size]
+    cld
+    rep movsb
+
+    mov dword [abs BOOTINFO_ADDR + BOOTINFO_MAGIC_OFF], BOOTINFO_MAGIC
+    mov al, [rel boot_drive]
+    mov [abs BOOTINFO_ADDR + BOOTINFO_BOOT_DRIVE_OFF], al
+    mov al, [rel boot_partition_index]
+    mov [abs BOOTINFO_ADDR + BOOTINFO_PARTITION_INDEX_OFF], al
+    mov ax, [rel bytes_per_sector]
+    mov [abs BOOTINFO_ADDR + BOOTINFO_BYTES_PER_SECTOR_OFF], ax
+    mov eax, [rel partition_lba_start]
+    mov [abs BOOTINFO_ADDR + BOOTINFO_PARTITION_LBA_OFF], eax
+    mov eax, [rel partition_sector_count]
+    mov [abs BOOTINFO_ADDR + BOOTINFO_PARTITION_COUNT_OFF], eax
+    mov word [abs BOOTINFO_ADDR + BOOTINFO_SCREEN_COLS_OFF], 80
+    mov word [abs BOOTINFO_ADDR + BOOTINFO_SCREEN_ROWS_OFF], 25
+
+    mov rdi, BOOTINFO_ADDR
+    mov rax, KERNEL_LOAD_ADDR
+    jmp rax
 
 gdt_start:
     dq 0
     dq 0x00CF9A000000FFFF
     dq 0x00CF92000000FFFF
+    dq 0x00AF9A000000FFFF
 gdt_end:
 
 gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd STAGE2_LOAD_ADDR + gdt_start
 
-CODE_SEL equ 0x08
+CODE32_SEL equ 0x08
 DATA_SEL equ 0x10
+CODE64_SEL equ 0x18
 
 [BITS 16]
+[DEFAULT ABS]
 msg_stage2:          db 'Stage2: starting', ENDL, 0
 msg_boot_ok:         db 'Stage2: boot sector loaded', ENDL, 0
 msg_parse_ok:        db 'Stage2: BPB parsed', ENDL, 0
 msg_root:            db 'Stage2: loading FAT16 metadata', ENDL, 0
-msg_pm:              db 'Stage2: entering protected mode', ENDL, 0
+msg_lm:              db 'Stage2: entering long mode', ENDL, 0
 msg_boot_error:      db 'Stage2: boot sector read failed', ENDL, 0
 msg_root_error:      db 'Stage2: root directory read failed', ENDL, 0
 msg_fat_error:       db 'Stage2: FAT read failed', ENDL, 0

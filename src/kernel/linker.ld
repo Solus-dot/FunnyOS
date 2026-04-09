@@ -1,9 +1,9 @@
-OUTPUT_FORMAT(elf32-i386)
+OUTPUT_FORMAT(elf64-x86-64)
 ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x00100000;
+    . = 0x00200000;
 
     .text ALIGN(16) :
     {
