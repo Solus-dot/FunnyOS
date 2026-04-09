@@ -60,9 +60,9 @@ static char translate_scancode(uint8_t scancode)
     }
 }
 
-uint32_t keyboard_read_line(char* buffer, uint32_t capacity)
+size_t keyboard_read_line(char* buffer, size_t capacity)
 {
-    uint32_t len = 0;
+    size_t len = 0;
 
     if (capacity == 0)
         return 0;

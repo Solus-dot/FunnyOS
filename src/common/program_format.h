@@ -8,7 +8,7 @@
 #endif
 
 #define PROGRAM_HEADER_MAGIC 0x31455846u
-#define PROGRAM_HEADER_VERSION 1u
+#define PROGRAM_HEADER_VERSION 2u
 #define PROGRAM_HEADER_FLAGS_NONE 0u
 
 typedef struct __attribute__((packed)) ProgramHeader {

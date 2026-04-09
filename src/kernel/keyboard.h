@@ -3,6 +3,6 @@
 
 #include "../common/types.h"
 
-uint32_t keyboard_read_line(char* buffer, uint32_t capacity);
+size_t keyboard_read_line(char* buffer, size_t capacity);
 
 #endif

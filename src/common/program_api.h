@@ -7,15 +7,16 @@
 
 typedef struct ProgramInfo {
     uint32_t magic;
-    uint32_t argc;
-    uint32_t argv_addr;
-    uint32_t cwd_addr;
+    uint32_t reserved;
+    size_t argc;
+    uintptr_t argv_addr;
+    uintptr_t cwd_addr;
 } ProgramInfo;
 
 typedef struct ProgramApi {
     void (*exit)(uint32_t status);
-    void (*write)(const char* data, uint32_t len);
-    uint32_t (*read_line)(char* buf, uint32_t cap);
+    void (*write)(const char* data, size_t len);
+    size_t (*read_line)(char* buf, size_t cap);
 } ProgramApi;
 
 #endif

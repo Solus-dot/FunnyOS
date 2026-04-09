@@ -6,7 +6,7 @@
 static void halt_forever(void)
 {
     for (;;) {
-#if defined(__i386__)
+#if defined(__i386__) || defined(__x86_64__)
         __asm__ volatile("hlt");
 #endif
     }

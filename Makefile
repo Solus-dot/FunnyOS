@@ -1,8 +1,8 @@
 ASM ?= nasm
 HOST_CC ?= gcc
-QEMU ?= qemu-system-i386
+QEMU ?= qemu-system-x86_64
 
-CROSS_PREFIX ?= $(shell if command -v i686-elf-gcc >/dev/null 2>&1; then printf 'i686-elf-'; elif command -v i386-elf-gcc >/dev/null 2>&1; then printf 'i386-elf-'; fi)
+CROSS_PREFIX ?= $(shell if command -v x86_64-elf-gcc >/dev/null 2>&1; then printf 'x86_64-elf-'; fi)
 CROSS_GCC := $(CROSS_PREFIX)gcc
 CROSS_LD := $(CROSS_PREFIX)ld
 CROSS_OBJCOPY := $(CROSS_PREFIX)objcopy
@@ -47,8 +47,8 @@ PROGRAM_PACK_TOOL := $(BUILD_DIR)/tools/programpack
 ROOT_TEST_FILE := test.txt
 DEMO_TEST_FILE := test.txt
 
-KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/kernel
-PROGRAM_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/programs/common
+KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -m64 -mno-red-zone -mcmodel=small -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/kernel
+PROGRAM_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -m64 -mno-red-zone -mcmodel=small -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/programs/common
 
 .PHONY: all image run debug test clean check-build-tools check-run-tools
 
@@ -72,7 +72,7 @@ test: image $(FAT_TOOL) $(PATH_TEST_TOOL) $(PROGRAM_PACK_TOOL)
 check-build-tools:
 	@command -v $(ASM) >/dev/null || { echo "Missing tool: $(ASM)"; exit 1; }
 	@command -v $(HOST_CC) >/dev/null || { echo "Missing tool: $(HOST_CC)"; exit 1; }
-	@test -n "$(CROSS_PREFIX)" || { echo "Missing cross toolchain: install i686-elf-gcc or i386-elf-gcc"; exit 1; }
+	@test -n "$(CROSS_PREFIX)" || { echo "Missing cross toolchain: install x86_64-elf-gcc"; exit 1; }
 	@command -v $(CROSS_GCC) >/dev/null || { echo "Missing tool: $(CROSS_GCC)"; exit 1; }
 	@command -v $(CROSS_LD) >/dev/null || { echo "Missing tool: $(CROSS_LD)"; exit 1; }
 	@command -v $(CROSS_OBJCOPY) >/dev/null || { echo "Missing tool: $(CROSS_OBJCOPY)"; exit 1; }
@@ -103,7 +103,7 @@ $(BUILD_DIR)/kernel/%.o: $(SRC_DIR)/kernel/%.c | $(BUILD_DIR)/kernel
 	$(CROSS_GCC) $(KERNEL_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/%.o: $(SRC_DIR)/kernel/%.asm | $(BUILD_DIR)/kernel
-	$(ASM) -f elf32 $< -o $@
+	$(ASM) -f elf64 $< -o $@
 
 $(HELLO_PROGRAM_ELF): $(PROGRAM_COMMON_C_OBJS) $(PROGRAM_COMMON_ASM_OBJS) $(HELLO_PROGRAM_OBJ) $(PROGRAM_LD_SCRIPT)
 	$(CROSS_LD) -T $(PROGRAM_LD_SCRIPT) -o $@ $(PROGRAM_COMMON_ASM_OBJS) $(PROGRAM_COMMON_C_OBJS) $(HELLO_PROGRAM_OBJ)
@@ -122,7 +122,7 @@ $(BUILD_DIR)/programs/common/%.o: $(SRC_DIR)/programs/common/%.c | $(BUILD_DIR)/
 	$(CROSS_GCC) $(PROGRAM_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/programs/common/%.o: $(SRC_DIR)/programs/common/%.asm | $(BUILD_DIR)/programs/common
-	$(ASM) -f elf32 $< -o $@
+	$(ASM) -f elf64 $< -o $@
 
 $(BUILD_DIR)/programs/hello/%.o: $(SRC_DIR)/programs/hello/%.c | $(BUILD_DIR)/programs/hello
 	$(CROSS_GCC) $(PROGRAM_CFLAGS) -c $< -o $@
