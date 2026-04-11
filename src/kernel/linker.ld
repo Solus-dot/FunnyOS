@@ -27,4 +27,6 @@ SECTIONS
         *(.bss*)
         __bss_end = .;
     }
+
+    __kernel_image_end = .;
 }

@@ -1,23 +1,61 @@
 #include "program.h"
 #include "../common/program_api.h"
-#include "../common/program_format.h"
 #include "console.h"
 #include "fs.h"
 #include "keyboard.h"
 #include "kstring.h"
 #include "path.h"
 
-#define PROGRAM_EXTENSION ".BIN"
+#define PROGRAM_EXTENSION ".ELF"
 #define PROGRAM_EXTENSION_LEN 4u
-#define PROGRAM_LOAD_ADDR ((uintptr_t)0x0000000000800000ull)
-#define PROGRAM_STACK_TOP ((uintptr_t)0x0000000000900000ull)
+#define PROGRAM_LOAD_ADDR ((uintptr_t)0x0000000000500000ull)
+#define PROGRAM_STACK_TOP ((uintptr_t)0x0000000000600000ull)
 #define PROGRAM_MAX_MEMORY_SIZE 65536u
-#define PROGRAM_MAX_FILE_SIZE (PROGRAM_MAX_MEMORY_SIZE + (uint32_t)PROGRAM_HEADER_SIZE)
+#define PROGRAM_MAX_FILE_SIZE (PROGRAM_MAX_MEMORY_SIZE * 2u)
 #define PROGRAM_MAX_ARGS 8u
 #define PROGRAM_ARG_BUFFER_SIZE 256u
+#define PT_LOAD 1u
+#define ELF_MAGIC 0x464C457Fu
+#define ELFCLASS64 2u
+#define EM_X86_64 62u
+
+typedef struct __attribute__((packed)) Elf64Header {
+    uint32_t magic;
+    uint8_t ident_class;
+    uint8_t ident_data;
+    uint8_t ident_version;
+    uint8_t ident_osabi;
+    uint8_t ident_abiversion;
+    uint8_t ident_pad[7];
+    uint16_t type;
+    uint16_t machine;
+    uint32_t version;
+    uint64_t entry;
+    uint64_t phoff;
+    uint64_t shoff;
+    uint32_t flags;
+    uint16_t ehsize;
+    uint16_t phentsize;
+    uint16_t phnum;
+    uint16_t shentsize;
+    uint16_t shnum;
+    uint16_t shstrndx;
+} Elf64Header;
+
+typedef struct __attribute__((packed)) Elf64ProgramHeader {
+    uint32_t type;
+    uint32_t flags;
+    uint64_t offset;
+    uint64_t vaddr;
+    uint64_t paddr;
+    uint64_t filesz;
+    uint64_t memsz;
+    uint64_t align;
+} Elf64ProgramHeader;
 
 extern uint64_t program_invoke(uintptr_t entry_point, uintptr_t api_ptr, uintptr_t info_ptr, uintptr_t stack_top);
 extern void program_exit_resume(void);
+extern uint8_t __kernel_image_end;
 
 typedef struct ProgramLoadContext {
     uint8_t* dst;
@@ -115,9 +153,9 @@ static bool path_has_program_suffix(const char* path)
         return false;
 
     return k_toupper(path[length - 4u]) == '.'
-        && k_toupper(path[length - 3u]) == 'B'
-        && k_toupper(path[length - 2u]) == 'I'
-        && k_toupper(path[length - 1u]) == 'N';
+        && k_toupper(path[length - 3u]) == 'E'
+        && k_toupper(path[length - 2u]) == 'L'
+        && k_toupper(path[length - 1u]) == 'F';
 }
 
 static bool build_lookup_path(const char* base, const char* command, char* out, uint32_t capacity)
@@ -125,6 +163,8 @@ static bool build_lookup_path(const char* base, const char* command, char* out, 
     char with_extension[PATH_CAPACITY];
     uint32_t command_len = (uint32_t)k_strlen(command);
 
+    if (path_has_program_suffix(command))
+        return path_normalize(base, command, out, capacity);
     if (command_len + PROGRAM_EXTENSION_LEN + 1u > sizeof(with_extension))
         return false;
 
@@ -186,38 +226,63 @@ static bool tokenize_args(const char* command, const char* argument_line)
     return true;
 }
 
-static bool program_validate_header(uint32_t file_size, uintptr_t* entry_point_out)
+static bool program_validate_elf(uint32_t file_size, uintptr_t* entry_point_out)
 {
-    const ProgramHeader* header = (const ProgramHeader*)g_program_file_buffer;
+    const Elf64Header* header = (const Elf64Header*)g_program_file_buffer;
     uint8_t* program_dst = (uint8_t*)PROGRAM_LOAD_ADDR;
+    uint16_t index;
+    bool entry_in_loaded_segment = false;
 
-    if (file_size < PROGRAM_HEADER_SIZE) {
+    if (PROGRAM_LOAD_ADDR < (uintptr_t)&__kernel_image_end) {
+        console_write_line("program load failed");
+        return false;
+    }
+
+    if (file_size < sizeof(*header)) {
         console_write_line("invalid program");
         return false;
     }
-    if (header->magic != PROGRAM_HEADER_MAGIC
-        || header->version != PROGRAM_HEADER_VERSION
-        || header->header_size != PROGRAM_HEADER_SIZE
-        || header->flags != PROGRAM_HEADER_FLAGS_NONE) {
+    if (header->magic != ELF_MAGIC
+        || header->ident_class != ELFCLASS64
+        || header->machine != EM_X86_64
+        || header->phentsize != sizeof(Elf64ProgramHeader)
+        || header->phoff > file_size
+        || (uint64_t)header->phnum * header->phentsize > file_size - header->phoff) {
         console_write_line("invalid program");
-        return false;
-    }
-    if (header->image_size == 0u || header->entry_offset >= header->image_size) {
-        console_write_line("invalid program");
-        return false;
-    }
-    if ((uint32_t)header->header_size > file_size || header->image_size != file_size - (uint32_t)header->header_size) {
-        console_write_line("invalid program");
-        return false;
-    }
-    if (header->image_size > PROGRAM_MAX_MEMORY_SIZE || header->bss_size > PROGRAM_MAX_MEMORY_SIZE - header->image_size) {
-        console_write_line("program too large");
         return false;
     }
 
     k_memset(program_dst, 0, PROGRAM_MAX_MEMORY_SIZE);
-    k_memcpy(program_dst, g_program_file_buffer + header->header_size, header->image_size);
-    *entry_point_out = PROGRAM_LOAD_ADDR + header->entry_offset;
+    for (index = 0; index < header->phnum; ++index) {
+        const Elf64ProgramHeader* segment = (const Elf64ProgramHeader*)(g_program_file_buffer + header->phoff + (uint64_t)index * header->phentsize);
+
+        if (segment->type != PT_LOAD)
+            continue;
+        if (segment->offset > file_size || segment->filesz > file_size - segment->offset || segment->filesz > segment->memsz) {
+            console_write_line("invalid program");
+            return false;
+        }
+        if (segment->vaddr < PROGRAM_LOAD_ADDR
+            || segment->memsz > PROGRAM_MAX_MEMORY_SIZE
+            || segment->vaddr > PROGRAM_LOAD_ADDR + (uint64_t)(PROGRAM_MAX_MEMORY_SIZE - segment->memsz)) {
+            console_write_line("program too large");
+            return false;
+        }
+        if (segment->memsz != 0u
+            && header->entry >= segment->vaddr
+            && header->entry < segment->vaddr + segment->memsz)
+            entry_in_loaded_segment = true;
+
+        k_memset((void*)(uintptr_t)segment->vaddr, 0, (size_t)segment->memsz);
+        k_memcpy((void*)(uintptr_t)segment->vaddr, g_program_file_buffer + segment->offset, (size_t)segment->filesz);
+    }
+
+    if (!entry_in_loaded_segment) {
+        console_write_line("invalid program");
+        return false;
+    }
+
+    *entry_point_out = (uintptr_t)header->entry;
     return true;
 }
 
@@ -251,7 +316,7 @@ static bool program_load_binary(const char* path, uintptr_t* entry_point_out)
         return false;
     }
 
-    return program_validate_header(load_context.size, entry_point_out);
+    return program_validate_elf(load_context.size, entry_point_out);
 }
 
 static bool program_run_path(const char* path, const char* command, const char* argument_line, const char* cwd)
