@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "keyboard.h"
 #include "kstring.h"
+#include "memory.h"
 #include "panic.h"
 #include "path.h"
 #include "program.h"
@@ -29,7 +30,7 @@ typedef struct ShellCommand {
 
 static char g_cwd[PATH_CAPACITY] = "/";
 
-static const char* const MSG_COMMANDS = "Commands: help ls cd pwd cat clear mkdir write append rm mv panic fault";
+static const char* const MSG_COMMANDS = "Commands: help ls cd pwd cat clear mkdir write append rm mv memstat panic fault";
 static const char* const MSG_INVALID_PATH = "invalid path";
 static const char* const MSG_NOT_FOUND = "not found";
 static const char* const MSG_ALREADY_EXISTS = "already exists";
@@ -49,6 +50,7 @@ static void shell_command_write(const char* argument);
 static void shell_command_append(const char* argument);
 static void shell_command_rm(const char* argument);
 static void shell_command_mv(const char* argument);
+static void shell_command_memstat(const char* argument);
 static void shell_command_panic(const char* argument);
 static void shell_command_fault(const char* argument);
 
@@ -64,6 +66,7 @@ static const ShellCommand g_commands[] = {
     {"append", "usage: append <path> <text>", shell_command_append},
     {"rm", "usage: rm <path>", shell_command_rm},
     {"mv", "usage: mv <old> <new>", shell_command_mv},
+    {"memstat", NULL, shell_command_memstat},
     {"panic", NULL, shell_command_panic},
     {"fault", "usage: fault <ud2|pf>", shell_command_fault},
 };
@@ -438,6 +441,12 @@ static void shell_command_mv(const char* argument)
         return;
 
     shell_print_fs_result(fs_rename(old_path, new_path), false);
+}
+
+static void shell_command_memstat(const char* argument)
+{
+    (void)argument;
+    memory_dump_stats();
 }
 
 static void shell_command_panic(const char* argument)
