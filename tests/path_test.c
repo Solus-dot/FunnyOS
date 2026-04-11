@@ -39,6 +39,7 @@ int main(void)
         {"/MYDIR", "./TEST.TXT", "/MYDIR/TEST.TXT"},
         {"/MYDIR", "../BIGDIR/./ITEM00.TXT", "/BIGDIR/ITEM00.TXT"},
         {"/", "////MYDIR//TEST.TXT", "/MYDIR/TEST.TXT"},
+        {"/", "longfilenamecomponent.txt", "/LONGFILENAMECOMPONENT.TXT"},
     };
     char too_small[4];
     uint32_t i;

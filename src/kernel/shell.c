@@ -235,7 +235,6 @@ static void shell_command_help(const char* argument)
 static void shell_command_ls(const char* argument)
 {
     char path[PATH_CAPACITY];
-    FsNodeInfo node;
     FsListContext list_context;
 
     list_context.wrote_anything = false;
@@ -246,6 +245,14 @@ static void shell_command_ls(const char* argument)
         return;
     }
 
+    if (path[0] == '/' && path[1] == '\0') {
+        shell_print_fs_result(fs_list_dir(path, shell_print_dir_entry, &list_context), false);
+        return;
+    }
+
+    {
+        FsNodeInfo node;
+
     if (fs_stat(path, &node) != FS_OK) {
         console_write_line(MSG_NOT_FOUND);
         return;
@@ -253,6 +260,7 @@ static void shell_command_ls(const char* argument)
     if (node.type != FS_NODE_DIR) {
         console_write_line(MSG_NOT_A_DIRECTORY);
         return;
+    }
     }
     shell_print_fs_result(fs_list_dir(path, shell_print_dir_entry, &list_context), false);
 }
@@ -260,7 +268,6 @@ static void shell_command_ls(const char* argument)
 static void shell_command_cd(const char* argument)
 {
     char path[PATH_CAPACITY];
-    FsNodeInfo node;
 
     if (argument == NULL || *argument == '\0') {
         shell_print_usage("usage: cd <path>");
@@ -268,6 +275,12 @@ static void shell_command_cd(const char* argument)
     }
     if (!resolve_path_or_print(argument, path))
         return;
+    if (path[0] == '/' && path[1] == '\0') {
+        k_strcpy(g_cwd, path);
+        return;
+    }
+    {
+        FsNodeInfo node;
     if (fs_stat(path, &node) != FS_OK) {
         console_write_line(MSG_NOT_FOUND);
         return;
@@ -275,6 +288,7 @@ static void shell_command_cd(const char* argument)
     if (node.type != FS_NODE_DIR) {
         console_write_line(MSG_NOT_A_DIRECTORY);
         return;
+    }
     }
 
     k_strcpy(g_cwd, path);

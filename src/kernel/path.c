@@ -1,60 +1,52 @@
 #include "path.h"
 #include "kstring.h"
 
-#define PATH_COMPONENT_LIMIT 16u
-#define PATH_COMPONENT_CAPACITY 13u
-
-static bool push_component(char components[PATH_COMPONENT_LIMIT][PATH_COMPONENT_CAPACITY], uint32_t* count, const char* start, uint32_t len)
+static bool push_component(char* out, uint32_t* pos, uint32_t capacity, uint32_t starts[PATH_CAPACITY], uint32_t* count, const char* start, uint32_t len)
 {
     uint32_t i;
 
-    if (*count >= PATH_COMPONENT_LIMIT || len == 0u || len > 12u)
+    if (len == 0u || *count >= PATH_CAPACITY)
         return false;
 
+    if (*pos != 1u) {
+        if (*pos + 1u >= capacity)
+            return false;
+        out[(*pos)++] = '/';
+    }
+    if (*pos + len >= capacity)
+        return false;
+
+    starts[*count] = *pos;
     for (i = 0; i < len; ++i)
-        components[*count][i] = k_toupper(start[i]);
-    components[*count][len] = '\0';
+        out[(*pos)++] = k_toupper(start[i]);
+    out[*pos] = '\0';
     ++(*count);
     return true;
 }
 
-bool path_normalize(const char* cwd, const char* input, char* out, uint32_t capacity)
+static void pop_component(char* out, uint32_t* pos, uint32_t starts[PATH_CAPACITY], uint32_t* count)
 {
-    char components[PATH_COMPONENT_LIMIT][PATH_COMPONENT_CAPACITY];
-    uint32_t count = 0;
-    const char* cursor;
-    uint32_t i;
-    uint32_t pos = 0;
+    uint32_t start;
 
-    if (cwd == NULL || input == NULL || out == NULL || capacity < 2u)
-        return false;
-
-    if (input[0] != '/') {
-        cursor = cwd;
-        while (*cursor == '/')
-            ++cursor;
-        while (*cursor != '\0') {
-            const char* slash = cursor;
-            uint32_t len = 0;
-
-            while (*slash != '\0' && *slash != '/') {
-                ++slash;
-                ++len;
-            }
-
-            if (!push_component(components, &count, cursor, len))
-                return false;
-
-            while (*slash == '/')
-                ++slash;
-            cursor = slash;
-        }
+    if (*count == 0u) {
+        *pos = 1u;
+        out[1] = '\0';
+        return;
     }
 
-    cursor = input;
-    while (*cursor == '/')
-        ++cursor;
+    start = starts[--(*count)];
+    *pos = start > 1u ? start - 1u : 1u;
+    out[*pos] = '\0';
+}
 
+static bool absorb_path(char* out, uint32_t* pos, uint32_t capacity, uint32_t starts[PATH_CAPACITY], uint32_t* count, const char* path)
+{
+    const char* cursor;
+
+    while (*path == '/')
+        ++path;
+
+    cursor = path;
     while (*cursor != '\0') {
         const char* slash = cursor;
         uint32_t len = 0;
@@ -66,9 +58,8 @@ bool path_normalize(const char* cwd, const char* input, char* out, uint32_t capa
 
         if (len == 1u && cursor[0] == '.') {
         } else if (len == 2u && cursor[0] == '.' && cursor[1] == '.') {
-            if (count != 0u)
-                --count;
-        } else if (!push_component(components, &count, cursor, len)) {
+            pop_component(out, pos, starts, count);
+        } else if (!push_component(out, pos, capacity, starts, count, cursor, len)) {
             return false;
         }
 
@@ -77,26 +68,29 @@ bool path_normalize(const char* cwd, const char* input, char* out, uint32_t capa
         cursor = slash;
     }
 
-    out[pos++] = '/';
+    return true;
+}
+
+bool path_normalize(const char* cwd, const char* input, char* out, uint32_t capacity)
+{
+    uint32_t starts[PATH_CAPACITY];
+    uint32_t count = 0;
+    uint32_t pos = 1u;
+
+    if (cwd == NULL || input == NULL || out == NULL || capacity < 2u)
+        return false;
+
+    out[0] = '/';
+    out[1] = '\0';
+
+    if (input[0] != '/' && !absorb_path(out, &pos, capacity, starts, &count, cwd))
+        return false;
+    if (!absorb_path(out, &pos, capacity, starts, &count, input))
+        return false;
+
     if (count == 0u) {
         out[pos] = '\0';
         return true;
-    }
-
-    for (i = 0; i < count; ++i) {
-        uint32_t j = 0;
-
-        while (components[i][j] != '\0') {
-            if (pos + 1u >= capacity)
-                return false;
-            out[pos++] = components[i][j++];
-        }
-
-        if (i + 1u < count) {
-            if (pos + 1u >= capacity)
-                return false;
-            out[pos++] = '/';
-        }
     }
 
     out[pos] = '\0';
