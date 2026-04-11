@@ -14,7 +14,7 @@ static void halt_forever(void)
 
 void kmain(const BootInfo* boot_info)
 {
-    console_init();
+    console_init(boot_info);
 
     if (boot_info == 0 || boot_info->magic != BOOTINFO_MAGIC) {
         console_write_line("BootInfo invalid");

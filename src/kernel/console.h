@@ -1,9 +1,10 @@
 #ifndef FUNNYOS_KERNEL_CONSOLE_H
 #define FUNNYOS_KERNEL_CONSOLE_H
 
+#include "../common/bootinfo.h"
 #include "../common/types.h"
 
-void console_init(void);
+void console_init(const BootInfo* boot_info);
 void console_write_char(char c);
 void console_write_n(const char* s, size_t count);
 void console_write(const char* s);

@@ -5,10 +5,16 @@ static bool g_block_ready = false;
 
 bool block_init(const BootInfo* boot_info)
 {
+    uint8_t boot_drive;
+
     if (boot_info == NULL)
         return false;
 
-    g_block_ready = ata_init(boot_info->boot_drive);
+    boot_drive = boot_info->boot_drive_number;
+    if (boot_drive < 0x80u || boot_drive > 0x83u)
+        boot_drive = 0x80u;
+
+    g_block_ready = ata_init(boot_drive);
     return g_block_ready;
 }
 

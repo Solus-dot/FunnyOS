@@ -14,15 +14,21 @@
 static volatile uint16_t* const g_vga = (volatile uint16_t*)0xB8000;
 static uint16_t g_row = 0;
 static uint16_t g_col = 0;
+static bool g_console_vga_enabled = true;
 
 static void put_vga_at(uint16_t row, uint16_t col, char c)
 {
+    if (!g_console_vga_enabled)
+        return;
     g_vga[row * VGA_WIDTH + col] = (uint16_t)VGA_ATTRIBUTE << 8 | (uint8_t)c;
 }
 
 static void update_cursor(void)
 {
     uint16_t position = (uint16_t)(g_row * VGA_WIDTH + g_col);
+
+    if (!g_console_vga_enabled)
+        return;
 
     io_out8(VGA_CRTC_INDEX_PORT, VGA_CURSOR_HIGH_INDEX);
     io_out8(VGA_CRTC_DATA_PORT, (uint8_t)(position >> 8));
@@ -50,8 +56,9 @@ static void scroll_if_needed(void)
     update_cursor();
 }
 
-void console_init(void)
+void console_init(const BootInfo* boot_info)
 {
+    g_console_vga_enabled = boot_info != NULL && (boot_info->console_flags & BOOTINFO_CONSOLE_VGA_TEXT) != 0;
     serial_init();
     console_clear();
 }

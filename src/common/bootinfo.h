@@ -5,15 +5,31 @@
 
 #define BOOTINFO_MAGIC 0x534f4e46u
 
+#define BOOTINFO_CONSOLE_TEXT 0x0001u
+#define BOOTINFO_CONSOLE_VGA_TEXT 0x0002u
+
+typedef struct BootMemoryMap {
+    uintptr_t base;
+    size_t size;
+    uint32_t descriptor_size;
+    uint32_t descriptor_version;
+} BootMemoryMap;
+
 typedef struct BootInfo {
     uint32_t magic;
-    uint8_t boot_drive;
-    uint8_t boot_partition_index;
     uint16_t bytes_per_sector;
+    uint8_t boot_drive_number;
+    uint8_t reserved0;
     uint32_t partition_lba_start;
     uint32_t partition_sector_count;
+    uint16_t console_flags;
     uint16_t screen_columns;
     uint16_t screen_rows;
+    uintptr_t framebuffer_base;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint32_t framebuffer_pixels_per_scanline;
+    BootMemoryMap memory_map;
 } BootInfo;
 
 #endif
