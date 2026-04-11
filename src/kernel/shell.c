@@ -69,6 +69,16 @@ static void shell_print_prompt(void)
     console_write("> ");
 }
 
+static void shell_print_banner(void)
+{
+    console_write_line("========================================");
+    console_write_line(" FunnyOS");
+    console_write_line(" UEFI kernel + FAT32 shell");
+    console_write_line(" Type 'help' to list commands.");
+    console_write_line("========================================");
+    console_write_char('\n');
+}
+
 static void shell_print_usage(const char* usage)
 {
     if (usage != NULL)
@@ -462,7 +472,7 @@ void shell_run(void)
 {
     char line[SHELL_LINE_CAPACITY];
 
-    console_write_line("FunnyOS shell ready");
+    shell_print_banner();
 
     for (;;) {
         shell_print_prompt();

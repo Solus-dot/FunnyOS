@@ -10,10 +10,14 @@
 #define VGA_CRTC_DATA_PORT 0x3D5u
 #define VGA_CURSOR_HIGH_INDEX 14u
 #define VGA_CURSOR_LOW_INDEX 15u
-#define FB_CHAR_WIDTH 8u
-#define FB_CHAR_HEIGHT 16u
+#define FB_CHAR_WIDTH 12u
+#define FB_CHAR_HEIGHT 20u
 #define FB_GLYPH_WIDTH 5u
 #define FB_GLYPH_HEIGHT 7u
+#define FB_GLYPH_SCALE_X 2u
+#define FB_GLYPH_SCALE_Y 2u
+#define FB_GLYPH_OFFSET_X 1u
+#define FB_GLYPH_OFFSET_Y 2u
 
 static volatile uint16_t* const g_vga = (volatile uint16_t*)0xB8000;
 static uint16_t g_row = 0;
@@ -134,12 +138,24 @@ static void put_framebuffer_char_at(uint32_t row, uint32_t col, char c)
     if (c == ' ')
         return;
 
-    for (y = 0; y < FB_CHAR_HEIGHT; ++y) {
-        uint8_t bits = glyph_row_bits(c, (uint8_t)(y >> 1u));
+    for (y = 0; y < FB_GLYPH_HEIGHT; ++y) {
+        uint8_t bits = glyph_row_bits(c, (uint8_t)y);
+        uint32_t draw_y;
 
         for (x = 0; x < FB_GLYPH_WIDTH; ++x) {
-            if ((bits & (1u << (FB_GLYPH_WIDTH - 1u - x))) != 0u)
-                put_framebuffer_pixel(base_x + 1u + x, base_y + 1u + y, g_framebuffer_fg);
+            uint32_t draw_x;
+
+            if ((bits & (1u << (FB_GLYPH_WIDTH - 1u - x))) == 0u)
+                continue;
+
+            for (draw_y = 0; draw_y < FB_GLYPH_SCALE_Y; ++draw_y) {
+                for (draw_x = 0; draw_x < FB_GLYPH_SCALE_X; ++draw_x) {
+                    put_framebuffer_pixel(
+                        base_x + FB_GLYPH_OFFSET_X + x * FB_GLYPH_SCALE_X + draw_x,
+                        base_y + FB_GLYPH_OFFSET_Y + y * FB_GLYPH_SCALE_Y + draw_y,
+                        g_framebuffer_fg);
+                }
+            }
         }
     }
 }
