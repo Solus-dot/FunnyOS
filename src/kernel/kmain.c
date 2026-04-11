@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "memory.h"
 #include "panic.h"
+#include "paging.h"
 #include "shell.h"
 
 void kmain(const BootInfo* boot_info)
@@ -21,6 +22,9 @@ void kmain(const BootInfo* boot_info)
 
     if (!fs_init(boot_info)) {
         panic("FS init failed");
+    }
+    if (!paging_init(boot_info)) {
+        panic("Paging init failed");
     }
     shell_run();
 }
