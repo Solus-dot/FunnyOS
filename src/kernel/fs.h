@@ -4,6 +4,8 @@
 #include "../common/bootinfo.h"
 #include "../common/types.h"
 
+#define FS_NAME_CAPACITY 128u
+
 typedef enum FsNodeType {
     FS_NODE_FILE,
     FS_NODE_DIR
@@ -22,7 +24,7 @@ typedef enum FsResult {
 } FsResult;
 
 typedef struct FsNodeInfo {
-    char name[13];
+    char name[FS_NAME_CAPACITY];
     FsNodeType type;
     uint32_t size;
 } FsNodeInfo;
