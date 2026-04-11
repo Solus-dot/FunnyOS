@@ -1,230 +1,82 @@
 # FunnyOS
 
-FunnyOS is a small x86 hobby operating system built as a learning project and shaped into a cleaner, standard-tooling codebase over time. It started from the ideas in Nanobyte's tutorial series, but the current project is its own BIOS-booted, hard-disk-based OS with a protected-mode kernel, a writable FAT16 runtime filesystem, and a tiny interactive shell.
+FunnyOS is a small x86-64 hobby OS that is being migrated to a UEFI-only, FAT32-first architecture.
 
-The focus right now is not "do everything," but "do the fundamentals cleanly":
-- standard tools only: `nasm`, GNU cross-compiler tools, `make`, and `qemu`
-- a real hard-disk boot flow instead of floppy-only assumptions
-- a small kernel that reads files at runtime instead of relying on loader demos
-- a codebase that is easier to extend into something more OS-like
+The active tree now targets:
+- UEFI boot via `BOOTX64.EFI`
+- a single staged FAT-style root under `build/esp`
+- a 64-bit kernel loaded as `KERNEL.ELF`
+- ELF sample programs
+- a FAT32-backed runtime filesystem layer in the kernel
 
-## What It Does
+## Current Status
 
-Today, FunnyOS can:
-- boot from a generated hard-disk image using `MBR -> stage1 -> stage2 -> kernel`
-- load `STAGE2.BIN` and `KERNEL.BIN` from a FAT16 partition
-- switch into 64-bit long mode
-- access the boot disk at runtime using ATA PIO
-- mount a writable FAT16 filesystem inside the kernel
-- provide a small shell with built-ins and external flat-binary programs
+The repository now boots through the UEFI path under QEMU/OVMF, mounts the staged FAT32 runtime volume, and reaches the shell. The old BIOS, FAT16, and packed-program path has been removed from the mainline tree.
 
-Current shell commands:
-- `help`
-- `ls [path]`
-- `cd <path>`
-- `pwd`
-- `cat <path>`
-- `clear`
-- `mkdir <path>`
-- `write <path> <text>`
-- `append <path> <text>`
-- `rm <path>`
-- `mv <old> <new>`
+What currently works in-tree:
+- `make image`
+- `make run`
+- `make test`
+- UEFI boot through `BOOTX64.EFI`
+- loading `KERNEL.ELF`
+- FAT32-backed shell file operations
+- running the bundled ELF sample programs
 
-Current bundled external programs:
-- `HELLO`
-- `ARGS`
-
-It also supports:
-- absolute and relative paths
-- `.` and `..`
-- case-insensitive FAT 8.3 lookup
-- multi-cluster files and directories
-- flat-binary program loading from the FAT16 disk image
-- header-validated FunnyOS executables with a tiny custom file format
-- a tiny syscall-style program ABI for output, input, and exit
-
-## Project Status
-
-FunnyOS is in the "solid core" stage.
-
-That means:
-- the boot path works
-- the runtime filesystem works
-- the shell is usable
-- external programs can be loaded and run
-- the internals have started to separate into cleaner layers
-
-That also means it is still intentionally limited:
-- BIOS only, not UEFI
-- FAT16 only
-- no multitasking
-- no paging
-- no AHCI, SATA, or NVMe support
-
-## Architecture
-
-The current runtime stack is split like this:
-- `mbr`: tiny BIOS MBR that finds the active partition and loads the partition boot sector
-- `stage1`: tiny FAT16 volume boot sector that loads `stage2` from image-builder metadata
-- `stage2`: real-mode loader that reads FAT16, loads the kernel, prepares `BootInfo`, and enters long mode
-- `block`: boot-disk sector I/O layer in the kernel
-- `fs`: filesystem-facing kernel API used by the shell
-- `fat16`: FAT16 driver behind the `fs` API
-- `path`: canonical path normalization for shell and filesystem access
-- `program`: header-validated executable loader plus tiny kernel-owned program ABI
-- `shell`: user-facing command loop and dispatcher
-
-This keeps the shell from depending directly on FAT16 internals and makes future milestones easier to implement.
-
-## Program Model
-
-FunnyOS can now run tiny external programs stored as ordinary FAT16 files.
-
-The current model is intentionally small:
-- programs use a tiny FunnyOS executable header instead of raw bytes or ELF
-- they are loaded at a fixed address into the same address space as the kernel
-- there is no memory protection, multitasking, or process isolation yet
-- programs return control to the shell through a tiny kernel ABI
-- malformed or oversized program files are rejected before execution
-
-Right now the ABI exposes only a few essentials:
-- write text to the console/serial output
-- read a line of input
-- exit back to the shell
-
-That is enough to move beyond a built-in-only shell without pretending this is already a full DOS-like environment.
-
-## Quick Start
-
-### Requirements
+## Requirements
 
 You need:
 - `nasm`
 - `make`
 - `qemu-system-x86_64`
-- a GNU cross toolchain:
-  - `x86_64-elf-gcc`, `x86_64-elf-ld`, `x86_64-elf-objcopy`
-- a host C compiler for repo tools:
-  - `gcc` or compatible `cc`
+- `x86_64-elf-gcc`
+- `x86_64-elf-ld`
+- `x86_64-elf-objcopy`
+- a host C compiler such as `gcc` or `cc`
 
-The default build does not depend on:
-- Open Watcom
-- Bochs
-- `mkfs.fat`
-- `mcopy`
+The `Makefile` looks for common OVMF locations on Homebrew and Linux installs.
 
-### Build
+## Commands
+
+Build the staged image tree:
 
 ```sh
-make
+make image
 ```
 
-This builds:
-- `build/mbr.bin`
-- `build/stage1.bin`
-- `build/stage2.bin`
-- `build/kernel.elf`
-- `build/kernel.bin`
-- `build/tools/programpack`
-- `build/programs/HELLO.payload`
-- `build/programs/HELLO.BIN`
-- `build/programs/ARGS.payload`
-- `build/programs/ARGS.BIN`
-- `build/funnyos-disk.img`
-
-### Run
+Run under QEMU + OVMF:
 
 ```sh
 make run
 ```
 
-or:
-
-```sh
-./run.sh
-```
-
-This boots the generated hard-disk image in QEMU and forwards serial output to your terminal.
-
-### Debug
-
-```sh
-make debug
-```
-
-or:
-
-```sh
-./debug.sh
-```
-
-This starts QEMU paused with a GDB stub exposed through `-s -S`.
-
-### Test
+Run the lightweight host-side test:
 
 ```sh
 make test
 ```
 
-The test suite covers:
-- host-side FAT16 image inspection
-- host-side path normalization checks
-- layering checks to ensure the shell uses `fs`, not `fat16`, directly
-- booting to the shell prompt in QEMU
-- shell command execution over serial
-- external program loading and return-to-shell behavior
-- header validation for malformed and oversized executables
-- writable file and directory mutations
-- multi-cluster file and directory reads
-- missing-kernel error handling
+The convenience wrappers still forward to the same targets:
 
-If QEMU is unavailable, the host-side checks still run.
+```sh
+./run.sh
+./debug.sh
+```
 
 ## Repository Layout
 
 ```text
 .
-├── src/boot/mbr/         # BIOS MBR
-├── src/boot/stage1/      # tiny partition boot sector for stage2 handoff
-├── src/boot/stage2/      # FAT16 loader + protected-mode transition
-├── src/common/           # Shared boot/kernel structures
-├── src/kernel/           # Kernel, storage, filesystem, shell, program loader
-├── src/programs/         # Tiny flat-binary sample programs
-├── tools/imgbuild/       # Hard-disk/FAT16 image builder
-├── tools/fat/            # Host FAT16 inspection tool
-├── tests/                # Smoke tests and host-side checks
+├── src/boot/uefi/       # UEFI bootloader sources
+├── src/common/          # Shared boot/kernel/program structures
+├── src/kernel/          # Kernel, console, storage, FAT32 FS, shell, ELF loader
+├── src/programs/        # Sample ELF programs
+├── tests/               # Host-side checks
 ├── run.sh
 ├── debug.sh
 └── Makefile
 ```
 
-The repo has been trimmed so the active path is the only path left. There is no legacy Watcom build flow hiding in the tree anymore.
+## Notes
 
-## Disk Layout
-
-The generated image is a fixed `64 MiB` raw disk with:
-- one active MBR partition
-- a FAT16 filesystem
-- the partition starting at LBA `2048`
-
-The kernel is linked at `0x00200000` and entered in 64-bit long mode with identity-mapped paging already enabled.
-
-## Limitations
-
-FunnyOS is currently best treated as:
-- a QEMU-first hobby OS
-- a clean learning base for boot, disk, filesystem, and shell work
-- a stepping stone toward a bigger DOS-like or general hobby OS
-
-It should not be described as portable to arbitrary x86 hardware yet. The current runtime assumes legacy BIOS-style boot and IDE-compatible disk access.
-
-## Why This Project Exists
-
-The point of FunnyOS is to keep the project understandable while still being real enough to grow:
-- the boot path is explicit
-- the disk image is built inside the repo
-- the kernel reads its own files at runtime
-- the code is being refactored toward cleaner internal boundaries instead of piling features on tutorial code
-
-If you want to work on an OS without jumping straight into a huge codebase, that is the niche this project is trying to fill.
+- The old BIOS boot chain, FAT16 runtime driver, packed `.BIN` executable format, and legacy host image tools were intentionally removed from the mainline tree.
+- The current runtime is still single-address-space and shell-first; user-mode isolation, paging work, and broader hardware support remain future milestones.
