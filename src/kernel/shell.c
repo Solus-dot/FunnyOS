@@ -471,12 +471,17 @@ static void shell_execute(char* line)
 void shell_run(void)
 {
     char line[SHELL_LINE_CAPACITY];
+    bool first_prompt = true;
 
     shell_print_banner();
 
     for (;;) {
+        if (!first_prompt)
+            console_write_char('\n');
+
         shell_print_prompt();
         keyboard_read_line(line, sizeof(line));
         shell_execute(line);
+        first_prompt = false;
     }
 }
