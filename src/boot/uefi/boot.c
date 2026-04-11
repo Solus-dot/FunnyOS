@@ -47,6 +47,7 @@ EFI_GUID gEfiSimpleFileSystemProtocolGuid = {0x964E5B22u, 0x6459u, 0x11d2u, {0x8
 EFI_GUID gEfiFileInfoGuid = {0x09576E92u, 0x6D3Fu, 0x11d2u, {0x8Eu, 0x39u, 0x00u, 0xA0u, 0xC9u, 0x69u, 0x72u, 0x3Bu}};
 EFI_GUID gEfiBlockIoProtocolGuid = {0x964E5B21u, 0x6459u, 0x11d2u, {0x8Eu, 0x39u, 0x00u, 0xA0u, 0xC9u, 0x69u, 0x72u, 0x3Bu}};
 EFI_GUID gEfiDevicePathProtocolGuid = {0x09576E91u, 0x6D3Fu, 0x11d2u, {0x8Eu, 0x39u, 0x00u, 0xA0u, 0xC9u, 0x69u, 0x72u, 0x3Bu}};
+EFI_GUID gEfiGraphicsOutputProtocolGuid = {0x9042A9DEu, 0x23DCu, 0x4A38u, {0x96u, 0xFBu, 0x7Au, 0xDEu, 0xD0u, 0x80u, 0x51u, 0x6Au}};
 
 static EFI_SYSTEM_TABLE* g_st = NULL;
 static EFI_BOOT_SERVICES* g_bs = NULL;
@@ -245,6 +246,34 @@ static EFI_STATUS query_console(UINTN* cols_out, UINTN* rows_out)
     return EFI_SUCCESS;
 }
 
+static EFI_STATUS gather_graphics_info(BootInfo* boot_info)
+{
+    EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
+    EFI_STATUS status;
+
+    if (boot_info == NULL)
+        return 1;
+
+    status = open_protocol(g_st->ConsoleOutHandle, &gEfiGraphicsOutputProtocolGuid, (void**)&gop);
+    if (EFI_ERROR(status) || gop == NULL || gop->Mode == NULL || gop->Mode->Info == NULL)
+        return status;
+
+    boot_info->framebuffer_base = (uintptr_t)gop->Mode->FrameBufferBase;
+    boot_info->framebuffer_width = gop->Mode->Info->HorizontalResolution;
+    boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
+    boot_info->framebuffer_pixels_per_scanline = gop->Mode->Info->PixelsPerScanLine;
+
+    if (gop->Mode->Info->PixelFormat == 0u)
+        boot_info->framebuffer_format = BOOTINFO_FRAMEBUFFER_FORMAT_RGBX;
+    else if (gop->Mode->Info->PixelFormat == 1u)
+        boot_info->framebuffer_format = BOOTINFO_FRAMEBUFFER_FORMAT_BGRX;
+    else
+        return 1;
+
+    boot_info->console_flags |= BOOTINFO_CONSOLE_FRAMEBUFFER;
+    return EFI_SUCCESS;
+}
+
 static EFI_STATUS gather_block_info(EFI_HANDLE device, uint16_t* bytes_per_sector, uint32_t* sector_count)
 {
     EFI_BLOCK_IO_PROTOCOL* block_io = NULL;
@@ -394,6 +423,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* system_tab
         boot_info->screen_columns = (uint16_t)columns;
         boot_info->screen_rows = (uint16_t)rows;
     }
+    if (!EFI_ERROR(gather_graphics_info(boot_info)))
+        boot_info->console_flags &= (uint16_t)~BOOTINFO_CONSOLE_VGA_TEXT;
     status = gather_boot_device_info(boot_device, &boot_info->boot_drive_number, &boot_info->partition_lba_start);
     if (EFI_ERROR(status))
         return status;

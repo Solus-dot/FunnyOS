@@ -7,6 +7,10 @@
 
 #define BOOTINFO_CONSOLE_TEXT 0x0001u
 #define BOOTINFO_CONSOLE_VGA_TEXT 0x0002u
+#define BOOTINFO_CONSOLE_FRAMEBUFFER 0x0004u
+
+#define BOOTINFO_FRAMEBUFFER_FORMAT_BGRX 1u
+#define BOOTINFO_FRAMEBUFFER_FORMAT_RGBX 2u
 
 typedef struct BootMemoryMap {
     uintptr_t base;
@@ -29,6 +33,7 @@ typedef struct BootInfo {
     uint32_t framebuffer_width;
     uint32_t framebuffer_height;
     uint32_t framebuffer_pixels_per_scanline;
+    uint32_t framebuffer_format;
     BootMemoryMap memory_map;
 } BootInfo;
 

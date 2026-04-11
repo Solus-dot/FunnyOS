@@ -227,10 +227,42 @@ typedef struct EFI_BLOCK_IO_PROTOCOL {
     EFI_STATUS(EFIAPI* FlushBlocks)(struct EFI_BLOCK_IO_PROTOCOL*);
 } EFI_BLOCK_IO_PROTOCOL;
 
+typedef struct EFI_GRAPHICS_OUTPUT_MODE_INFORMATION {
+    uint32_t Version;
+    uint32_t HorizontalResolution;
+    uint32_t VerticalResolution;
+    uint32_t PixelFormat;
+    struct {
+        uint32_t RedMask;
+        uint32_t GreenMask;
+        uint32_t BlueMask;
+        uint32_t ReservedMask;
+    } PixelInformation;
+    uint32_t PixelsPerScanLine;
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE {
+    uint32_t MaxMode;
+    uint32_t Mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info;
+    UINTN SizeOfInfo;
+    EFI_PHYSICAL_ADDRESS FrameBufferBase;
+    UINTN FrameBufferSize;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL EFI_GRAPHICS_OUTPUT_PROTOCOL;
+struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
+    void* QueryMode;
+    void* SetMode;
+    void* Blt;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE* Mode;
+};
+
 extern EFI_GUID gEfiLoadedImageProtocolGuid;
 extern EFI_GUID gEfiSimpleFileSystemProtocolGuid;
 extern EFI_GUID gEfiFileInfoGuid;
 extern EFI_GUID gEfiBlockIoProtocolGuid;
 extern EFI_GUID gEfiDevicePathProtocolGuid;
+extern EFI_GUID gEfiGraphicsOutputProtocolGuid;
 
 #endif
