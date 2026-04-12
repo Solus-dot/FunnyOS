@@ -101,7 +101,7 @@ $(ESP_READY): $(BUILD_DIR)/EFI/BOOT/BOOTX64.EFI $(BUILD_DIR)/kernel.elf $(HELLO_
 	printf 'fs0:\\EFI\\BOOT\\BOOTX64.EFI\r\n' > $(ESP_DIR)/startup.nsh
 	: > $(ESP_DIR)/BIGDIR/ITEM69.TXT
 	python3 -c 'from pathlib import Path; root = Path("$(ESP_DIR)"); (root / "BIGFILE.TXT").write_text("FunnyOS big file line for FAT32 multi-cluster testing.\\n" * 80); [(root / "BIGDIR" / f"ITEM{i:02d}.TXT").write_text("") for i in range(70)]'
-	if command -v xattr >/dev/null 2>&1; then xattr -cr $(ESP_DIR); fi
+	if command -v xattr >/dev/null 2>&1; then xattr -cr $(ESP_DIR) >/dev/null 2>&1 || echo "warning: xattr cleanup failed for $(ESP_DIR); continuing"; fi
 	touch $@
 
 $(DISK_IMAGE): $(ESP_READY) | $(BUILD_DIR)
