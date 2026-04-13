@@ -1,6 +1,7 @@
 #include "memory.h"
 #include "console.h"
 #include "kstring.h"
+#include "process_layout.h"
 
 #define PAGE_SIZE 4096u
 #define MEMORY_MAX_FREE_RANGES 256u
@@ -354,6 +355,8 @@ bool memory_init(const BootInfo* boot_info)
     if (!reserve_range(0u, MEMORY_RESERVED_LOW_END))
         return false;
     if (!reserve_range((uintptr_t)&_start, (uintptr_t)&__kernel_image_end))
+        return false;
+    if (!reserve_range(PROCESS_ABI_REGION_START, PROCESS_ABI_REGION_END))
         return false;
     if ((boot_info->console_flags & BOOTINFO_CONSOLE_FRAMEBUFFER) != 0u) {
         uintptr_t framebuffer_size = (uintptr_t)boot_info->framebuffer_pixels_per_scanline

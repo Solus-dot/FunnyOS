@@ -5,12 +5,9 @@
 #include "kstring.h"
 #include "memory.h"
 #include "paging.h"
+#include "process_layout.h"
 
 #define PAGE_SIZE 4096u
-#define PROCESS_IMAGE_BASE ((uintptr_t)0x0000000000500000ull)
-#define PROCESS_STACK_TOP ((uintptr_t)0x0000000000600000ull)
-#define PROCESS_MAX_MEMORY_SIZE 65536u
-#define PROCESS_STACK_SIZE 65536u
 #define PROCESS_MAX_FILE_SIZE 131072u
 #define PROCESS_MAX_ARGS 8u
 #define PROCESS_ARG_BUFFER_SIZE 256u
@@ -69,6 +66,16 @@ static Process* g_active_process = NULL;
 static size_t bytes_to_pages(size_t size)
 {
     return (size + PAGE_SIZE - 1u) / PAGE_SIZE;
+}
+
+static uintptr_t align_down_page(uintptr_t value)
+{
+    return value & ~(PAGE_SIZE - 1u);
+}
+
+static uintptr_t align_up_page(uintptr_t value)
+{
+    return (value + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
 }
 
 static void process_api_write(const char* data, size_t len)
@@ -135,13 +142,10 @@ static void process_reset_fields(Process* process)
 {
     k_memset(process, 0, sizeof(*process));
     process->state = PROCESS_STATE_IDLE;
-    process->address_space.image_base = PROCESS_IMAGE_BASE;
-    process->address_space.image_capacity = PROCESS_MAX_MEMORY_SIZE;
-    process->address_space.image_page_count = bytes_to_pages(PROCESS_MAX_MEMORY_SIZE);
-    process->address_space.stack_size = PROCESS_STACK_SIZE;
-    process->address_space.stack_base = PROCESS_STACK_TOP - PROCESS_STACK_SIZE;
-    process->address_space.stack_top = PROCESS_STACK_TOP;
-    process->address_space.stack_page_count = bytes_to_pages(PROCESS_STACK_SIZE);
+    process->address_space.stack_size = PROCESS_ABI_STACK_SIZE;
+    process->address_space.stack_base = PROCESS_ABI_STACK_BASE;
+    process->address_space.stack_top = PROCESS_ABI_STACK_TOP;
+    process->address_space.stack_page_count = bytes_to_pages(PROCESS_ABI_STACK_SIZE);
     process->address_space.file_capacity = PROCESS_MAX_FILE_SIZE;
     process->address_space.file_page_count = bytes_to_pages(PROCESS_MAX_FILE_SIZE);
 }
@@ -212,14 +216,9 @@ static bool process_configure_image_layout(Process* process, uint32_t file_size)
 {
     const Elf64Header* header = (const Elf64Header*)process->image.file_buffer;
     uint16_t index;
-    uintptr_t image_base = process->address_space.image_base;
-    size_t image_capacity = process->address_space.image_capacity;
-    bool entry_in_loaded_segment = false;
-
-    if (image_base < (uintptr_t)&__kernel_image_end) {
-        console_write_line("program load failed");
-        return false;
-    }
+    uintptr_t image_min = ~(uintptr_t)0u;
+    uintptr_t image_end = 0u;
+    bool has_load_segment = false;
 
     if (file_size < sizeof(*header)) {
         console_write_line("invalid program");
@@ -243,20 +242,51 @@ static bool process_configure_image_layout(Process* process, uint32_t file_size)
             console_write_line("invalid program");
             return false;
         }
-        if (segment->vaddr < image_base
-            || segment->memsz > image_capacity
-            || segment->vaddr > image_base + (uint64_t)(image_capacity - segment->memsz)) {
+        uintptr_t segment_start;
+        uintptr_t segment_end;
+
+        if (segment->vaddr < PROCESS_ABI_IMAGE_BASE
+            || segment->vaddr >= PROCESS_ABI_IMAGE_LIMIT
+            || segment->memsz > PROCESS_ABI_IMAGE_LIMIT - segment->vaddr) {
             console_write_line("program too large");
             return false;
         }
-        if (segment->memsz != 0u
-            && header->entry >= segment->vaddr
-            && header->entry < segment->vaddr + segment->memsz)
-            entry_in_loaded_segment = true;
+
+        has_load_segment = true;
+        segment_start = align_down_page((uintptr_t)segment->vaddr);
+        segment_end = align_up_page((uintptr_t)segment->vaddr + (uintptr_t)segment->memsz);
+        if (segment_start < image_min)
+            image_min = segment_start;
+        if (segment_end > image_end)
+            image_end = segment_end;
     }
 
-    if (!entry_in_loaded_segment) {
+    if (!has_load_segment) {
         console_write_line("invalid program");
+        return false;
+    }
+    if (image_min < (uintptr_t)&__kernel_image_end) {
+        console_write_line("program load failed");
+        return false;
+    }
+    if (header->entry < image_min || header->entry >= image_end) {
+        console_write_line("invalid program");
+        return false;
+    }
+    if (image_end <= image_min) {
+        console_write_line("invalid program");
+        return false;
+    }
+
+    process->address_space.image_base = image_min;
+    process->address_space.image_capacity = image_end - image_min;
+    process->address_space.image_page_count = bytes_to_pages(process->address_space.image_capacity);
+    if (image_min < PROCESS_ABI_IMAGE_BASE || image_end > PROCESS_ABI_IMAGE_LIMIT) {
+        console_write_line("program too large");
+        return false;
+    }
+    if (image_end + PROCESS_ABI_STACK_GAP > process->address_space.stack_base) {
+        console_write_line("program too large");
         return false;
     }
 
