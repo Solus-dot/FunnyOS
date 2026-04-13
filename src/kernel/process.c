@@ -3,11 +3,15 @@
 #include "fs.h"
 #include "keyboard.h"
 #include "kstring.h"
+#include "memory.h"
+#include "paging.h"
 
-#define PROCESS_LOAD_ADDR ((uintptr_t)0x0000000000500000ull)
+#define PAGE_SIZE 4096u
+#define PROCESS_IMAGE_BASE ((uintptr_t)0x0000000000500000ull)
 #define PROCESS_STACK_TOP ((uintptr_t)0x0000000000600000ull)
 #define PROCESS_MAX_MEMORY_SIZE 65536u
-#define PROCESS_MAX_FILE_SIZE (PROCESS_MAX_MEMORY_SIZE * 2u)
+#define PROCESS_STACK_SIZE 65536u
+#define PROCESS_MAX_FILE_SIZE 131072u
 #define PROCESS_MAX_ARGS 8u
 #define PROCESS_ARG_BUFFER_SIZE 256u
 #define PT_LOAD 1u
@@ -60,8 +64,12 @@ extern void program_exit_resume(void);
 extern uint8_t __kernel_image_end;
 
 static Process g_foreground_process;
-static uint8_t g_foreground_process_file_buffer[PROCESS_MAX_FILE_SIZE];
 static Process* g_active_process = NULL;
+
+static size_t bytes_to_pages(size_t size)
+{
+    return (size + PAGE_SIZE - 1u) / PAGE_SIZE;
+}
 
 static void process_api_write(const char* data, size_t len)
 {
@@ -119,6 +127,23 @@ static bool process_file_chunk_copy(const uint8_t* data, uint32_t length, void* 
     k_memcpy(load_context->dst + load_context->size, data, length);
     load_context->size += length;
     return true;
+}
+
+static bool process_prepare_address_space(Process* process);
+
+static void process_reset_fields(Process* process)
+{
+    k_memset(process, 0, sizeof(*process));
+    process->state = PROCESS_STATE_IDLE;
+    process->address_space.image_base = PROCESS_IMAGE_BASE;
+    process->address_space.image_capacity = PROCESS_MAX_MEMORY_SIZE;
+    process->address_space.image_page_count = bytes_to_pages(PROCESS_MAX_MEMORY_SIZE);
+    process->address_space.stack_size = PROCESS_STACK_SIZE;
+    process->address_space.stack_base = PROCESS_STACK_TOP - PROCESS_STACK_SIZE;
+    process->address_space.stack_top = PROCESS_STACK_TOP;
+    process->address_space.stack_page_count = bytes_to_pages(PROCESS_STACK_SIZE);
+    process->address_space.file_capacity = PROCESS_MAX_FILE_SIZE;
+    process->address_space.file_page_count = bytes_to_pages(PROCESS_MAX_FILE_SIZE);
 }
 
 static void process_prepare_runtime(Process* process)
@@ -183,12 +208,12 @@ static bool process_tokenize_args(Process* process, const char* command, const c
     return true;
 }
 
-static bool process_validate_elf(Process* process, uint32_t file_size)
+static bool process_configure_image_layout(Process* process, uint32_t file_size)
 {
     const Elf64Header* header = (const Elf64Header*)process->image.file_buffer;
+    uint16_t index;
     uintptr_t image_base = process->address_space.image_base;
     size_t image_capacity = process->address_space.image_capacity;
-    uint16_t index;
     bool entry_in_loaded_segment = false;
 
     if (image_base < (uintptr_t)&__kernel_image_end) {
@@ -210,10 +235,8 @@ static bool process_validate_elf(Process* process, uint32_t file_size)
         return false;
     }
 
-    k_memset((void*)image_base, 0, image_capacity);
     for (index = 0; index < header->phnum; ++index) {
         const Elf64ProgramHeader* segment = (const Elf64ProgramHeader*)(process->image.file_buffer + header->phoff + (uint64_t)index * header->phentsize);
-
         if (segment->type != PT_LOAD)
             continue;
         if (segment->offset > file_size || segment->filesz > file_size - segment->offset || segment->filesz > segment->memsz) {
@@ -230,9 +253,6 @@ static bool process_validate_elf(Process* process, uint32_t file_size)
             && header->entry >= segment->vaddr
             && header->entry < segment->vaddr + segment->memsz)
             entry_in_loaded_segment = true;
-
-        k_memset((void*)(uintptr_t)segment->vaddr, 0, (size_t)segment->memsz);
-        k_memcpy((void*)(uintptr_t)segment->vaddr, process->image.file_buffer + segment->offset, (size_t)segment->filesz);
     }
 
     if (!entry_in_loaded_segment) {
@@ -242,6 +262,29 @@ static bool process_validate_elf(Process* process, uint32_t file_size)
 
     process->image.entry_point = (uintptr_t)header->entry;
     process->image.file_size = file_size;
+    return true;
+}
+
+static bool process_copy_image_segments(Process* process, uint32_t file_size)
+{
+    const Elf64Header* header = (const Elf64Header*)process->image.file_buffer;
+    uint16_t index;
+
+    k_memset((void*)process->address_space.image_base, 0, process->address_space.image_capacity);
+    for (index = 0; index < header->phnum; ++index) {
+        const Elf64ProgramHeader* segment = (const Elf64ProgramHeader*)(process->image.file_buffer + header->phoff + (uint64_t)index * header->phentsize);
+
+        if (segment->type != PT_LOAD)
+            continue;
+        if (segment->offset > file_size || segment->filesz > file_size - segment->offset || segment->filesz > segment->memsz) {
+            console_write_line("invalid program");
+            return false;
+        }
+
+        k_memset((void*)(uintptr_t)segment->vaddr, 0, (size_t)segment->memsz);
+        k_memcpy((void*)(uintptr_t)segment->vaddr, process->image.file_buffer + segment->offset, (size_t)segment->filesz);
+    }
+
     process->state = PROCESS_STATE_LOADED;
     return true;
 }
@@ -276,7 +319,76 @@ static bool process_load_binary(Process* process, const char* path)
         return false;
     }
 
-    return process_validate_elf(process, load_context.size);
+    if (!process_configure_image_layout(process, load_context.size))
+        return false;
+    if (!process_prepare_address_space(process))
+        return false;
+    return process_copy_image_segments(process, load_context.size);
+}
+
+static bool process_prepare_address_space(Process* process)
+{
+    process->address_space.image_backing = alloc_pages(process->address_space.image_page_count);
+    if (process->address_space.image_backing == NULL)
+        return false;
+
+    process->address_space.stack_backing = alloc_pages(process->address_space.stack_page_count);
+    if (process->address_space.stack_backing == NULL)
+        return false;
+
+    if (!paging_map_range(
+            process->address_space.image_base,
+            (uintptr_t)process->address_space.image_backing,
+            process->address_space.image_capacity,
+            true,
+            true))
+        return false;
+
+    if (!paging_map_range(
+            process->address_space.stack_base,
+            (uintptr_t)process->address_space.stack_backing,
+            process->address_space.stack_size,
+            true,
+            false))
+        return false;
+
+    k_memset((void*)process->address_space.image_base, 0, process->address_space.image_capacity);
+    k_memset((void*)process->address_space.stack_base, 0, process->address_space.stack_size);
+    return true;
+}
+
+static void process_release_address_space(Process* process)
+{
+    if (process == NULL)
+        return;
+
+    if (process->address_space.image_backing != NULL) {
+        (void)paging_map_range(
+            process->address_space.image_base,
+            process->address_space.image_base,
+            process->address_space.image_capacity,
+            true,
+            true);
+        free_pages(process->address_space.image_backing, process->address_space.image_page_count);
+        process->address_space.image_backing = NULL;
+    }
+
+    if (process->address_space.stack_backing != NULL) {
+        (void)paging_map_range(
+            process->address_space.stack_base,
+            process->address_space.stack_base,
+            process->address_space.stack_size,
+            true,
+            true);
+        free_pages(process->address_space.stack_backing, process->address_space.stack_page_count);
+        process->address_space.stack_backing = NULL;
+    }
+
+    if (process->address_space.file_buffer != NULL) {
+        free_pages(process->address_space.file_buffer, process->address_space.file_page_count);
+        process->address_space.file_buffer = NULL;
+        process->image.file_buffer = NULL;
+    }
 }
 
 void process_init(Process* process)
@@ -284,13 +396,7 @@ void process_init(Process* process)
     if (process == NULL)
         return;
 
-    k_memset(process, 0, sizeof(*process));
-    process->state = PROCESS_STATE_IDLE;
-    process->address_space.image_base = PROCESS_LOAD_ADDR;
-    process->address_space.stack_top = PROCESS_STACK_TOP;
-    process->address_space.image_capacity = PROCESS_MAX_MEMORY_SIZE;
-    process->address_space.file_capacity = PROCESS_MAX_FILE_SIZE;
-    process->image.file_buffer = g_foreground_process_file_buffer;
+    process_reset_fields(process);
     process_prepare_runtime(process);
 }
 
@@ -307,9 +413,19 @@ bool process_run_foreground(Process* process, const char* path, const char* comm
         return false;
     }
 
-    k_strcpy(process->runtime.cwd, cwd);
-    if (!process_load_binary(process, path))
+    process->address_space.file_buffer = alloc_pages(process->address_space.file_page_count);
+    if (process->address_space.file_buffer == NULL) {
+        console_write_line("program load failed");
+        process_release_address_space(process);
         return false;
+    }
+    process->image.file_buffer = (uint8_t*)process->address_space.file_buffer;
+
+    k_strcpy(process->runtime.cwd, cwd);
+    if (!process_load_binary(process, path)) {
+        process_release_address_space(process);
+        return false;
+    }
 
     process->runtime.exit_requested = false;
     process->runtime.exit_status = 0u;
@@ -324,19 +440,23 @@ bool process_run_foreground(Process* process, const char* path, const char* comm
 
     if (invoke_result == 0u) {
         console_write_line("program returned unexpectedly");
+        process_release_address_space(process);
         return false;
     }
     if (!process->runtime.exit_requested) {
         console_write_line("program returned unexpectedly");
+        process_release_address_space(process);
         return false;
     }
     if (process->runtime.exit_status != 0u) {
         console_write("program exited with status ");
         process_write_u32(process->runtime.exit_status);
         console_write_char('\n');
+        process_release_address_space(process);
         return false;
     }
 
+    process_release_address_space(process);
     return true;
 }
 

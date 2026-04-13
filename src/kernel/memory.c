@@ -7,8 +7,6 @@
 #define MEMORY_HEAP_ALIGNMENT 16u
 #define MEMORY_MAX_PHYS_ADDR 0x0000000100000000ull
 #define MEMORY_RESERVED_LOW_END 0x0000000000100000ull
-#define MEMORY_PROGRAM_REGION_START 0x0000000000500000ull
-#define MEMORY_PROGRAM_REGION_END 0x0000000000600000ull
 #define EFI_MEMORY_TYPE_CONVENTIONAL 7u
 
 typedef struct EfiMemoryDescriptor {
@@ -356,8 +354,6 @@ bool memory_init(const BootInfo* boot_info)
     if (!reserve_range(0u, MEMORY_RESERVED_LOW_END))
         return false;
     if (!reserve_range((uintptr_t)&_start, (uintptr_t)&__kernel_image_end))
-        return false;
-    if (!reserve_range(MEMORY_PROGRAM_REGION_START, MEMORY_PROGRAM_REGION_END))
         return false;
     if ((boot_info->console_flags & BOOTINFO_CONSOLE_FRAMEBUFFER) != 0u) {
         uintptr_t framebuffer_size = (uintptr_t)boot_info->framebuffer_pixels_per_scanline

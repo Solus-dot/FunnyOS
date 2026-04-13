@@ -252,6 +252,30 @@ static void load_cr3(uintptr_t pml4)
     __asm__ volatile("mov %0, %%cr3" : : "r"(pml4) : "memory");
 }
 
+bool paging_map_range(uintptr_t virt_start, uintptr_t phys_start, size_t size, bool writable, bool executable)
+{
+    uintptr_t virt_cursor;
+    uintptr_t phys_cursor;
+    uintptr_t virt_end;
+
+    if (g_pml4 == NULL || size == 0u)
+        return false;
+
+    virt_cursor = align_down_page(virt_start, PAGE_SIZE_4K);
+    phys_cursor = align_down_page(phys_start, PAGE_SIZE_4K);
+    virt_end = align_up_page(virt_start + size, PAGE_SIZE_4K);
+
+    while (virt_cursor < virt_end) {
+        if (!map_page_4k(virt_cursor, phys_cursor, writable, executable))
+            return false;
+        virt_cursor += PAGE_SIZE_4K;
+        phys_cursor += PAGE_SIZE_4K;
+    }
+
+    load_cr3((uintptr_t)g_pml4);
+    return true;
+}
+
 bool paging_init(const BootInfo* boot_info)
 {
     uintptr_t cursor;

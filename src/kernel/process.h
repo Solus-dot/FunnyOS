@@ -14,9 +14,17 @@ typedef enum ProcessState {
 
 typedef struct ProcessAddressSpace {
     uintptr_t image_base;
+    uintptr_t stack_base;
     uintptr_t stack_top;
     size_t image_capacity;
+    size_t image_page_count;
+    void* image_backing;
+    size_t stack_size;
+    size_t stack_page_count;
+    void* stack_backing;
     size_t file_capacity;
+    size_t file_page_count;
+    void* file_buffer;
 } ProcessAddressSpace;
 
 typedef struct ProcessImage {
