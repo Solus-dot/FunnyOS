@@ -8,7 +8,7 @@ Today, FunnyOS can:
 - boot under QEMU + OVMF through `BOOTX64.EFI`
 - load `KERNEL.ELF` from the same FAT32 disk image it later mounts at runtime
 - initialize a 64-bit freestanding kernel
-- access the boot disk at runtime through ATA PIO
+- access the boot disk at runtime through either ATA PIO or AHCI
 - mount a writable FAT32 volume in the kernel
 - provide a shell with basic file and directory commands
 - load and run tiny external ELF programs
@@ -25,6 +25,9 @@ Current shell commands:
 - `append <path> <text>`
 - `rm <path>`
 - `mv <old> <new>`
+- `memstat`
+- `blockinfo`
+- `lspci`
 
 Bundled sample programs:
 - `HELLO`
@@ -66,10 +69,16 @@ Build the disk image:
 make image
 ```
 
-Boot the OS under QEMU + OVMF:
+Boot the OS under QEMU + OVMF with the legacy IDE model:
 
 ```sh
 make run
+```
+
+Boot the OS under QEMU + OVMF with an AHCI-backed SATA disk:
+
+```sh
+make run-ahci
 ```
 
 Start QEMU paused with a GDB stub:
@@ -100,7 +109,7 @@ The current flow is:
 1. QEMU boots OVMF.
 2. OVMF loads `EFI/BOOT/BOOTX64.EFI` from the generated FAT32 image.
 3. The UEFI loader reads `KERNEL.ELF`, gathers boot/device metadata, exits boot services, and jumps into the kernel.
-4. The kernel initializes the console, ATA block layer, FAT32 filesystem, and shell.
+4. The kernel initializes the console, PCI discovery, paging, the runtime block backend, the FAT32 filesystem, and the shell.
 5. The shell can launch `HELLO.ELF` and `ARGS.ELF` from the root volume.
 
 The generated image is staged under `build/esp` and then packed into `build/funnyos.img`.
@@ -124,12 +133,12 @@ The generated image is staged under `build/esp` and then packed into `build/funn
 FunnyOS is still an early hobby OS. Important current limits:
 - QEMU-first, not a broadly portable hardware target
 - UEFI boot only
-- ATA PIO storage path only
+- runtime storage is still limited to ATA PIO or AHCI
 - serial console only in the current mainline run flow
 - no scheduler
 - no paging-based process isolation
 - no user-mode execution yet
-- no networking, USB, AHCI, NVMe, graphics UI, or SMP support
+- no networking, USB keyboard/input stack, NVMe, graphics UI, or SMP support
 
 The FAT32 layer is usable, but the project is still in the “kernel core plus shell” stage, not a general-purpose OS.
 
@@ -138,9 +147,11 @@ The FAT32 layer is usable, but the project is still in the “kernel core plus s
 What is working now:
 - `make image`
 - `make run`
+- `make run-ahci`
 - `make test`
 - UEFI boot to the shell in QEMU
 - FAT32-backed file and directory operations
+- runtime FAT32 over both ATA PIO and AHCI in QEMU
 - ELF sample program loading
 
 What remains for the longer roadmap:
