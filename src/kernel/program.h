@@ -2,6 +2,7 @@
 #define FUNNYOS_KERNEL_PROGRAM_H
 
 #include "../common/types.h"
+#include "process.h"
 
 typedef enum ProgramDispatchResult {
     PROGRAM_DISPATCH_EXECUTED,
