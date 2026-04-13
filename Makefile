@@ -50,7 +50,7 @@ UEFI_BOOT_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-a
 KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -m64 -mno-red-zone -mcmodel=small -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/kernel
 PROGRAM_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -m64 -mno-red-zone -mcmodel=small -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/programs/common
 
-.PHONY: all image run run-headless debug debug-headless test clean check-build-tools check-run-tools
+.PHONY: all image run run-headless run-ahci run-ahci-headless debug debug-headless debug-ahci debug-ahci-headless test clean check-build-tools check-run-tools
 
 all: image
 
@@ -62,11 +62,23 @@ run: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
 run-headless: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
 	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -drive format=raw,file=$(DISK_IMAGE),if=ide -display none -serial stdio -monitor none
 
+run-ahci: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
+	$(QEMU) -machine q35 -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -device ich9-ahci,id=ahci -drive id=disk,file=$(DISK_IMAGE),if=none,format=raw -device ide-hd,drive=disk,bus=ahci.0 -serial stdio -monitor none
+
+run-ahci-headless: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
+	$(QEMU) -machine q35 -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -device ich9-ahci,id=ahci -drive id=disk,file=$(DISK_IMAGE),if=none,format=raw -device ide-hd,drive=disk,bus=ahci.0 -display none -serial stdio -monitor none
+
 debug: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
 	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -drive format=raw,file=$(DISK_IMAGE),if=ide -serial stdio -monitor none -s -S
 
 debug-headless: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
 	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -drive format=raw,file=$(DISK_IMAGE),if=ide -display none -serial stdio -monitor none -s -S
+
+debug-ahci: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
+	$(QEMU) -machine q35 -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -device ich9-ahci,id=ahci -drive id=disk,file=$(DISK_IMAGE),if=none,format=raw -device ide-hd,drive=disk,bus=ahci.0 -serial stdio -monitor none -s -S
+
+debug-ahci-headless: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
+	$(QEMU) -machine q35 -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -device ich9-ahci,id=ahci -drive id=disk,file=$(DISK_IMAGE),if=none,format=raw -device ide-hd,drive=disk,bus=ahci.0 -display none -serial stdio -monitor none -s -S
 
 test: image $(PATH_TEST_TOOL)
 	$(PATH_TEST_TOOL)

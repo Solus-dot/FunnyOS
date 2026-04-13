@@ -1,4 +1,5 @@
 #include "shell.h"
+#include "block.h"
 #include "console.h"
 #include "fs.h"
 #include "keyboard.h"
@@ -6,6 +7,7 @@
 #include "memory.h"
 #include "panic.h"
 #include "path.h"
+#include "pci.h"
 #include "program.h"
 #include "trap.h"
 
@@ -30,7 +32,7 @@ typedef struct ShellCommand {
 
 static char g_cwd[PATH_CAPACITY] = "/";
 
-static const char* const MSG_COMMANDS = "Commands: help ls cd pwd cat clear mkdir write append rm mv memstat panic fault";
+static const char* const MSG_COMMANDS = "Commands: help ls cd pwd cat clear mkdir write append rm mv memstat blockinfo lspci panic fault";
 static const char* const MSG_INVALID_PATH = "invalid path";
 static const char* const MSG_NOT_FOUND = "not found";
 static const char* const MSG_ALREADY_EXISTS = "already exists";
@@ -51,6 +53,8 @@ static void shell_command_append(const char* argument);
 static void shell_command_rm(const char* argument);
 static void shell_command_mv(const char* argument);
 static void shell_command_memstat(const char* argument);
+static void shell_command_blockinfo(const char* argument);
+static void shell_command_lspci(const char* argument);
 static void shell_command_panic(const char* argument);
 static void shell_command_fault(const char* argument);
 
@@ -67,9 +71,55 @@ static const ShellCommand g_commands[] = {
     {"rm", "usage: rm <path>", shell_command_rm},
     {"mv", "usage: mv <old> <new>", shell_command_mv},
     {"memstat", NULL, shell_command_memstat},
+    {"blockinfo", NULL, shell_command_blockinfo},
+    {"lspci", NULL, shell_command_lspci},
     {"panic", NULL, shell_command_panic},
     {"fault", "usage: fault <ud2|pf>", shell_command_fault},
 };
+
+typedef struct PciListContext {
+    bool wrote_anything;
+} PciListContext;
+
+static void shell_write_hex8(uint8_t value)
+{
+    static const char digits[] = "0123456789ABCDEF";
+
+    console_write_char(digits[(value >> 4) & 0x0Fu]);
+    console_write_char(digits[value & 0x0Fu]);
+}
+
+static void shell_write_hex16(uint16_t value)
+{
+    shell_write_hex8((uint8_t)(value >> 8));
+    shell_write_hex8((uint8_t)value);
+}
+
+static bool shell_print_pci_device(const PciDeviceInfo* info, void* context)
+{
+    PciListContext* list = (PciListContext*)context;
+
+    console_write("bus ");
+    shell_write_hex8(info->address.bus);
+    console_write(" dev ");
+    shell_write_hex8(info->address.device);
+    console_write(" fn ");
+    shell_write_hex8(info->address.function);
+    console_write(" class ");
+    shell_write_hex8(info->class_code);
+    console_write(":");
+    shell_write_hex8(info->subclass);
+    console_write(":");
+    shell_write_hex8(info->prog_if);
+    console_write(" vendor ");
+    shell_write_hex16(info->vendor_id);
+    console_write(" device ");
+    shell_write_hex16(info->device_id);
+    console_write_char('\n');
+
+    list->wrote_anything = true;
+    return true;
+}
 
 static void shell_print_prompt(void)
 {
@@ -447,6 +497,41 @@ static void shell_command_memstat(const char* argument)
 {
     (void)argument;
     memory_dump_stats();
+}
+
+static void shell_command_blockinfo(const char* argument)
+{
+    (void)argument;
+
+    console_write("block backend: ");
+    switch (block_backend_kind()) {
+    case BLOCK_BACKEND_AHCI:
+        console_write_line("ahci");
+        break;
+    case BLOCK_BACKEND_ATA_PIO:
+        console_write_line("ata-pio");
+        break;
+    case BLOCK_BACKEND_NONE:
+    default:
+        console_write_line("none");
+        break;
+    }
+}
+
+static void shell_command_lspci(const char* argument)
+{
+    PciListContext list;
+
+    (void)argument;
+    if (!pci_available()) {
+        console_write_line("pci unavailable");
+        return;
+    }
+
+    list.wrote_anything = false;
+    pci_enumerate(shell_print_pci_device, &list);
+    if (!list.wrote_anything)
+        console_write_line("no pci devices found");
 }
 
 static void shell_command_panic(const char* argument)
