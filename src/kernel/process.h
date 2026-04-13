@@ -39,6 +39,7 @@ typedef struct ProcessRuntime {
     char cwd[PATH_CAPACITY];
     char arg_buffer[256];
     uintptr_t argv[8];
+    uintptr_t user_info_addr;
     uint32_t exit_status;
     bool exit_requested;
 } ProcessRuntime;

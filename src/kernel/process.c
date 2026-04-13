@@ -56,6 +56,13 @@ typedef struct ProcessLoadContext {
     uint32_t size;
 } ProcessLoadContext;
 
+typedef struct ProcessUserContext {
+    ProgramInfo info;
+    uintptr_t argv[PROCESS_MAX_ARGS];
+    char cwd[PATH_CAPACITY];
+    char arg_buffer[PROCESS_ARG_BUFFER_SIZE];
+} ProcessUserContext;
+
 extern uint64_t program_invoke(uintptr_t entry_point, uintptr_t info_ptr, uintptr_t stack_top);
 extern void program_exit_resume(void);
 extern uint8_t __kernel_image_end;
@@ -111,6 +118,67 @@ static bool process_file_chunk_copy(const uint8_t* data, uint32_t length, void* 
 
 static bool process_prepare_address_space(Process* process);
 
+static bool process_range_contains(uintptr_t base, size_t size, uintptr_t ptr, size_t length)
+{
+    uintptr_t offset;
+
+    if (length == 0u)
+        return true;
+    if (ptr < base)
+        return false;
+
+    offset = ptr - base;
+    if (offset > size)
+        return false;
+    return length <= size - offset;
+}
+
+static bool process_user_range_valid(const Process* process, uintptr_t ptr, size_t length)
+{
+    if (process == NULL)
+        return false;
+
+    return process_range_contains(process->address_space.image_base, process->address_space.image_capacity, ptr, length)
+        || process_range_contains(process->address_space.stack_base, process->address_space.stack_size, ptr, length);
+}
+
+static bool process_stage_user_context(Process* process)
+{
+    ProcessUserContext* user_context;
+    size_t index;
+
+    if (process == NULL)
+        return false;
+    if (sizeof(ProcessUserContext) > process->address_space.stack_size)
+        return false;
+
+    user_context = (ProcessUserContext*)(uintptr_t)process->address_space.stack_base;
+    k_memset(user_context, 0, sizeof(*user_context));
+    k_memcpy(user_context->cwd, process->runtime.cwd, sizeof(user_context->cwd));
+    k_memcpy(user_context->arg_buffer, process->runtime.arg_buffer, sizeof(user_context->arg_buffer));
+
+    for (index = 0u; index < process->runtime.info.argc; ++index) {
+        uintptr_t source_ptr = process->runtime.argv[index];
+        uintptr_t source_base = (uintptr_t)process->runtime.arg_buffer;
+        size_t offset;
+
+        if (source_ptr < source_base)
+            return false;
+        offset = (size_t)(source_ptr - source_base);
+        if (offset >= sizeof(user_context->arg_buffer))
+            return false;
+        user_context->argv[index] = (uintptr_t)(user_context->arg_buffer + offset);
+    }
+
+    user_context->info.magic = PROGRAM_INFO_MAGIC;
+    user_context->info.reserved = 0u;
+    user_context->info.argc = process->runtime.info.argc;
+    user_context->info.argv_addr = (uintptr_t)user_context->argv;
+    user_context->info.cwd_addr = (uintptr_t)user_context->cwd;
+    process->runtime.user_info_addr = (uintptr_t)&user_context->info;
+    return true;
+}
+
 static void process_finish_exit(Process* process, uint32_t status, TrapFrame* frame)
 {
     if (process == NULL || frame == NULL)
@@ -139,6 +207,7 @@ static void process_prepare_runtime(Process* process)
 {
     process->runtime.info.magic = PROGRAM_INFO_MAGIC;
     process->runtime.info.reserved = 0u;
+    process->runtime.user_info_addr = 0u;
     process->runtime.exit_status = 0u;
     process->runtime.exit_requested = false;
 }
@@ -335,6 +404,8 @@ static bool process_load_binary(Process* process, const char* path)
         return false;
     if (!process_prepare_address_space(process))
         return false;
+    if (!process_stage_user_context(process))
+        return false;
     return process_copy_image_segments(process, load_context.size);
 }
 
@@ -401,6 +472,8 @@ static void process_release_address_space(Process* process)
         process->address_space.file_buffer = NULL;
         process->image.file_buffer = NULL;
     }
+
+    process->runtime.user_info_addr = 0u;
 }
 
 void process_init(Process* process)
@@ -445,7 +518,7 @@ bool process_run_foreground(Process* process, const char* path, const char* comm
     g_active_process = process;
     invoke_result = program_invoke(
         process->image.entry_point,
-        (uintptr_t)&process->runtime.info,
+        process->runtime.user_info_addr,
         process->address_space.stack_top);
     g_active_process = NULL;
 
@@ -483,11 +556,19 @@ bool process_handle_syscall(TrapFrame* frame)
         process_finish_exit(process, (uint32_t)frame->rdi, frame);
         return true;
     case PROGRAM_SYSCALL_WRITE:
+        if (!process_user_range_valid(process, (uintptr_t)frame->rdi, (size_t)frame->rsi)) {
+            frame->rax = 0u;
+            return true;
+        }
         console_write_n((const char*)(uintptr_t)frame->rdi, (size_t)frame->rsi);
         frame->rax = frame->rsi;
         return true;
     case PROGRAM_SYSCALL_READ_LINE:
         if (frame->rsi == 0u) {
+            frame->rax = 0u;
+            return true;
+        }
+        if (!process_user_range_valid(process, (uintptr_t)frame->rdi, (size_t)frame->rsi)) {
             frame->rax = 0u;
             return true;
         }
