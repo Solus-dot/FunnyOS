@@ -1,11 +1,9 @@
 #include "../common/runtime.h"
 
-uint32_t program_main(const ProgramApi* api, const ProgramInfo* info)
+uint32_t program_main(const ProgramInfo* info)
 {
     uintptr_t* argv;
     size_t i;
-
-    (void)api;
 
     program_write("argc=", 5);
     program_write_u32(info->argc);

@@ -19,8 +19,7 @@ program_invoke:
 
     mov r12, rdi
     mov rdi, rsi
-    mov rsi, rdx
-    mov rsp, rcx
+    mov rsp, rdx
     call r12
     xor eax, eax
     jmp program_restore

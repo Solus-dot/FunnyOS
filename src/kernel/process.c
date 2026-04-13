@@ -56,7 +56,7 @@ typedef struct ProcessLoadContext {
     uint32_t size;
 } ProcessLoadContext;
 
-extern uint64_t program_invoke(uintptr_t entry_point, uintptr_t api_ptr, uintptr_t info_ptr, uintptr_t stack_top);
+extern uint64_t program_invoke(uintptr_t entry_point, uintptr_t info_ptr, uintptr_t stack_top);
 extern void program_exit_resume(void);
 extern uint8_t __kernel_image_end;
 
@@ -76,33 +76,6 @@ static uintptr_t align_down_page(uintptr_t value)
 static uintptr_t align_up_page(uintptr_t value)
 {
     return (value + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
-}
-
-static void process_api_write(const char* data, size_t len)
-{
-    if (data == NULL)
-        return;
-
-    console_write_n(data, len);
-}
-
-static size_t process_api_read_line(char* buf, size_t cap)
-{
-    if (buf == NULL)
-        return 0;
-
-    return keyboard_read_line(buf, cap);
-}
-
-static void process_api_exit(uint32_t status)
-{
-    if (g_active_process != NULL) {
-        g_active_process->runtime.exit_requested = true;
-        g_active_process->runtime.exit_status = status;
-        g_active_process->state = PROCESS_STATE_EXITED;
-    }
-    __asm__ volatile("jmp program_exit_resume");
-    __builtin_unreachable();
 }
 
 static void process_write_u32(uint32_t value)
@@ -138,6 +111,18 @@ static bool process_file_chunk_copy(const uint8_t* data, uint32_t length, void* 
 
 static bool process_prepare_address_space(Process* process);
 
+static void process_finish_exit(Process* process, uint32_t status, TrapFrame* frame)
+{
+    if (process == NULL || frame == NULL)
+        return;
+
+    process->runtime.exit_requested = true;
+    process->runtime.exit_status = status;
+    process->state = PROCESS_STATE_EXITED;
+    frame->rax = 1u;
+    frame->rip = (uintptr_t)&program_exit_resume;
+}
+
 static void process_reset_fields(Process* process)
 {
     k_memset(process, 0, sizeof(*process));
@@ -152,9 +137,6 @@ static void process_reset_fields(Process* process)
 
 static void process_prepare_runtime(Process* process)
 {
-    process->runtime.api.exit = process_api_exit;
-    process->runtime.api.write = process_api_write;
-    process->runtime.api.read_line = process_api_read_line;
     process->runtime.info.magic = PROGRAM_INFO_MAGIC;
     process->runtime.info.reserved = 0u;
     process->runtime.exit_status = 0u;
@@ -463,7 +445,6 @@ bool process_run_foreground(Process* process, const char* path, const char* comm
     g_active_process = process;
     invoke_result = program_invoke(
         process->image.entry_point,
-        (uintptr_t)&process->runtime.api,
         (uintptr_t)&process->runtime.info,
         process->address_space.stack_top);
     g_active_process = NULL;
@@ -488,6 +469,34 @@ bool process_run_foreground(Process* process, const char* path, const char* comm
 
     process_release_address_space(process);
     return true;
+}
+
+bool process_handle_syscall(TrapFrame* frame)
+{
+    Process* process = g_active_process;
+
+    if (frame == NULL || process == NULL)
+        return false;
+
+    switch ((uint32_t)frame->rax) {
+    case PROGRAM_SYSCALL_EXIT:
+        process_finish_exit(process, (uint32_t)frame->rdi, frame);
+        return true;
+    case PROGRAM_SYSCALL_WRITE:
+        console_write_n((const char*)(uintptr_t)frame->rdi, (size_t)frame->rsi);
+        frame->rax = frame->rsi;
+        return true;
+    case PROGRAM_SYSCALL_READ_LINE:
+        if (frame->rsi == 0u) {
+            frame->rax = 0u;
+            return true;
+        }
+        frame->rax = keyboard_read_line((char*)(uintptr_t)frame->rdi, (size_t)frame->rsi);
+        return true;
+    default:
+        frame->rax = 0u;
+        return true;
+    }
 }
 
 Process* process_foreground(void)

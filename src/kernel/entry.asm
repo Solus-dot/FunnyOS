@@ -6,6 +6,8 @@ extern interrupt_dispatch
 extern __bss_start
 extern __bss_end
 
+SYSCALL_VECTOR equ 0x80
+
 section .text
 _start:
     cli
@@ -68,6 +70,7 @@ setup_platform:
     add rdi, 16
     loop .fill_idt
 
+    mov byte [rel idt_table + SYSCALL_VECTOR * 16 + 5], 0xEE
     lidt [rel idt_descriptor]
     ret
 

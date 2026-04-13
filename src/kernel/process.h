@@ -4,6 +4,7 @@
 #include "../common/program_api.h"
 #include "../common/types.h"
 #include "path.h"
+#include "trap.h"
 
 typedef enum ProcessState {
     PROCESS_STATE_IDLE,
@@ -34,7 +35,6 @@ typedef struct ProcessImage {
 } ProcessImage;
 
 typedef struct ProcessRuntime {
-    ProgramApi api;
     ProgramInfo info;
     char cwd[PATH_CAPACITY];
     char arg_buffer[256];
@@ -52,6 +52,7 @@ typedef struct Process {
 
 void process_init(Process* process);
 bool process_run_foreground(Process* process, const char* path, const char* command, const char* argument_line, const char* cwd);
+bool process_handle_syscall(TrapFrame* frame);
 Process* process_foreground(void);
 
 #endif

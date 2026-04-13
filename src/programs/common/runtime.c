@@ -1,7 +1,30 @@
 #include "runtime.h"
 
-const ProgramApi* g_program_api = (const ProgramApi*)0;
 const ProgramInfo* g_program_info = (const ProgramInfo*)0;
+
+static uint64_t program_syscall1(uint64_t number, uintptr_t arg0)
+{
+    uint64_t result;
+
+    __asm__ volatile(
+        "int %1"
+        : "=a"(result)
+        : "i"(PROGRAM_SYSCALL_VECTOR), "a"(number), "D"(arg0)
+        : "cc", "memory");
+    return result;
+}
+
+static uint64_t program_syscall2(uint64_t number, uintptr_t arg0, uintptr_t arg1)
+{
+    uint64_t result;
+
+    __asm__ volatile(
+        "int %1"
+        : "=a"(result)
+        : "i"(PROGRAM_SYSCALL_VECTOR), "a"(number), "D"(arg0), "S"(arg1)
+        : "cc", "memory");
+    return result;
+}
 
 size_t program_strlen(const char* s)
 {
@@ -13,9 +36,19 @@ size_t program_strlen(const char* s)
     return len;
 }
 
+void program_exit(uint32_t status)
+{
+    (void)program_syscall1(PROGRAM_SYSCALL_EXIT, (uintptr_t)status);
+    for (;;)
+        __asm__ volatile("hlt");
+}
+
 void program_write(const char* data, size_t len)
 {
-    g_program_api->write(data, len);
+    if (data == NULL || len == 0u)
+        return;
+
+    (void)program_syscall2(PROGRAM_SYSCALL_WRITE, (uintptr_t)data, (uintptr_t)len);
 }
 
 void program_write_str(const char* s)
@@ -50,5 +83,8 @@ void program_write_u32(uint32_t value)
 
 size_t program_read_line(char* buf, size_t cap)
 {
-    return g_program_api->read_line(buf, cap);
+    if (buf == NULL || cap == 0u)
+        return 0u;
+
+    return (size_t)program_syscall2(PROGRAM_SYSCALL_READ_LINE, (uintptr_t)buf, (uintptr_t)cap);
 }

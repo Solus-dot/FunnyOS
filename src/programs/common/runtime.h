@@ -4,10 +4,10 @@
 #include "../../common/program_api.h"
 #include "../../common/types.h"
 
-extern const ProgramApi* g_program_api;
 extern const ProgramInfo* g_program_info;
 
 size_t program_strlen(const char* s);
+void program_exit(uint32_t status);
 void program_write(const char* data, size_t len);
 void program_write_str(const char* s);
 void program_write_line(const char* s);

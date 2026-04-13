@@ -4,6 +4,13 @@
 #include "types.h"
 
 #define PROGRAM_INFO_MAGIC 0x4D524750u
+#define PROGRAM_SYSCALL_VECTOR 0x80u
+
+typedef enum ProgramSyscall {
+    PROGRAM_SYSCALL_EXIT = 0u,
+    PROGRAM_SYSCALL_WRITE = 1u,
+    PROGRAM_SYSCALL_READ_LINE = 2u
+} ProgramSyscall;
 
 typedef struct ProgramInfo {
     uint32_t magic;
@@ -12,11 +19,5 @@ typedef struct ProgramInfo {
     uintptr_t argv_addr;
     uintptr_t cwd_addr;
 } ProgramInfo;
-
-typedef struct ProgramApi {
-    void (*exit)(uint32_t status);
-    void (*write)(const char* data, size_t len);
-    size_t (*read_line)(char* buf, size_t cap);
-} ProgramApi;
 
 #endif
