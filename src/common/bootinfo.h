@@ -11,6 +11,7 @@
 
 #define BOOTINFO_FRAMEBUFFER_FORMAT_BGRX 1u
 #define BOOTINFO_FRAMEBUFFER_FORMAT_RGBX 2u
+#define BOOTINFO_DEVICE_PATH_CAPACITY 128u
 
 typedef struct BootMemoryMap {
     uintptr_t base;
@@ -22,10 +23,10 @@ typedef struct BootMemoryMap {
 typedef struct BootInfo {
     uint32_t magic;
     uint16_t bytes_per_sector;
-    uint8_t boot_drive_number;
-    uint8_t reserved0;
     uint32_t partition_lba_start;
     uint32_t partition_sector_count;
+    uint16_t boot_device_path_size;
+    uint8_t boot_device_path[BOOTINFO_DEVICE_PATH_CAPACITY];
     uint16_t console_flags;
     uint16_t screen_columns;
     uint16_t screen_rows;

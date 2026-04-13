@@ -287,39 +287,63 @@ static EFI_STATUS gather_block_info(EFI_HANDLE device, uint16_t* bytes_per_secto
     return EFI_SUCCESS;
 }
 
-static EFI_STATUS gather_boot_device_info(EFI_HANDLE device, uint8_t* boot_drive_out, uint32_t* partition_lba_out)
+static EFI_STATUS copy_boot_device_path(const EFI_DEVICE_PATH_PROTOCOL* device_path, BootInfo* boot_info)
+{
+    UINTN total_size = 0u;
+    const EFI_DEVICE_PATH_PROTOCOL* node = device_path;
+
+    if (device_path == NULL || boot_info == NULL)
+        return 1;
+
+    while (!device_path_is_end(node)) {
+        UINTN node_length = device_path_length(node);
+
+        if (node_length < sizeof(EFI_DEVICE_PATH_PROTOCOL))
+            return 1;
+        total_size += node_length;
+        if (total_size > BOOTINFO_DEVICE_PATH_CAPACITY)
+            return 1;
+        node = next_device_path_node(node);
+    }
+
+    total_size += device_path_length(node);
+    if (total_size > BOOTINFO_DEVICE_PATH_CAPACITY)
+        return 1;
+
+    mem_copy(boot_info->boot_device_path, device_path, total_size);
+    boot_info->boot_device_path_size = (uint16_t)total_size;
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS gather_boot_device_info(EFI_HANDLE device, BootInfo* boot_info)
 {
     EFI_DEVICE_PATH_PROTOCOL* device_path = NULL;
     EFI_STATUS status = open_protocol(device, &gEfiDevicePathProtocolGuid, (void**)&device_path);
     const EFI_DEVICE_PATH_PROTOCOL* node;
 
-    if (EFI_ERROR(status))
+    if (EFI_ERROR(status) || boot_info == NULL)
         return status;
     if (device_path == NULL)
         return 1;
 
-    *boot_drive_out = 0x80u;
-    *partition_lba_out = 0u;
+    boot_info->partition_lba_start = 0u;
+    status = copy_boot_device_path(device_path, boot_info);
+    if (EFI_ERROR(status))
+        return status;
+
     for (node = device_path; !device_path_is_end(node); node = next_device_path_node(node)) {
         UINTN node_length = device_path_length(node);
 
         if (node_length < sizeof(EFI_DEVICE_PATH_PROTOCOL))
             return 1;
-        if (node->Type == DEVICE_PATH_TYPE_MESSAGING
-            && node->SubType == DEVICE_PATH_SUBTYPE_ATAPI
-            && node_length >= sizeof(AtapiDevicePath)) {
-            const AtapiDevicePath* atapi = (const AtapiDevicePath*)node;
-
-            if (atapi->primary_secondary <= 1u && atapi->slave_master <= 1u)
-                *boot_drive_out = (uint8_t)(0x80u + atapi->primary_secondary * 2u + atapi->slave_master);
-        } else if (node->Type == DEVICE_PATH_TYPE_MEDIA
+        if (node->Type == DEVICE_PATH_TYPE_MEDIA
             && node->SubType == DEVICE_PATH_SUBTYPE_HARDDRIVE
             && node_length >= sizeof(HardDriveDevicePath)) {
             const HardDriveDevicePath* drive_path = (const HardDriveDevicePath*)node;
 
             if (drive_path->partition_start > 0xFFFFFFFFu)
                 return 1;
-            *partition_lba_out = (uint32_t)drive_path->partition_start;
+            boot_info->partition_lba_start = (uint32_t)drive_path->partition_start;
         }
     }
 
@@ -417,7 +441,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* system_tab
 
     mem_set(boot_info, 0, sizeof(*boot_info));
     boot_info->magic = BOOTINFO_MAGIC;
-    boot_info->boot_drive_number = 0x80u;
     boot_info->console_flags = BOOTINFO_CONSOLE_TEXT;
     if (!EFI_ERROR(query_console(&columns, &rows))) {
         boot_info->screen_columns = (uint16_t)columns;
@@ -425,7 +448,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* system_tab
     }
     if (!EFI_ERROR(gather_graphics_info(boot_info)))
         boot_info->console_flags &= (uint16_t)~BOOTINFO_CONSOLE_VGA_TEXT;
-    status = gather_boot_device_info(boot_device, &boot_info->boot_drive_number, &boot_info->partition_lba_start);
+    status = gather_boot_device_info(boot_device, boot_info);
     if (EFI_ERROR(status))
         return status;
     status = gather_block_info(boot_device, &boot_info->bytes_per_sector, &boot_info->partition_sector_count);
