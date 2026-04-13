@@ -69,7 +69,7 @@ Build the disk image:
 make image
 ```
 
-Boot the OS under QEMU + OVMF with the legacy IDE model in a normal QEMU window:
+Boot the OS under QEMU + OVMF with the legacy IDE model:
 
 ```sh
 make run
@@ -81,11 +81,11 @@ Boot the OS under QEMU + OVMF with an AHCI-backed SATA disk:
 make run-ahci
 ```
 
-Use the serial-terminal workflow only for headless runs:
+Window-only variants are also available, but they currently depend on the framebuffer console path working on your host/QEMU setup:
 
 ```sh
-make run-headless
-make run-ahci-headless
+make run-window
+make run-ahci-window
 ```
 
 Start QEMU paused with a GDB stub:
@@ -107,7 +107,14 @@ Convenience wrappers:
 ./debug.sh
 ```
 
-`make run` and `make run-ahci` now leave the UI in the QEMU window. The `*-headless` targets keep the serial-terminal workflow for testing and debugging.
+Headless serial-terminal variants:
+
+```sh
+make run-headless
+make run-ahci-headless
+```
+
+`make run` and `make run-ahci` keep the reliable serial-terminal workflow. The `*-window` targets leave input/output in the QEMU window only, which may not work yet if the kernel does not get a usable framebuffer console on your setup.
 
 ## Boot And Runtime Layout
 
