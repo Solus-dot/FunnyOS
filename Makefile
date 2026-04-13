@@ -89,7 +89,7 @@ check-build-tools:
 check-run-tools: check-build-tools
 	@command -v $(QEMU) >/dev/null || { echo "Missing tool: $(QEMU)"; exit 1; }
 
-$(ESP_READY): $(BUILD_DIR)/EFI/BOOT/BOOTX64.EFI $(BUILD_DIR)/kernel.elf $(HELLO_PROGRAM_ELF) $(ARGS_PROGRAM_ELF) $(ROOT_TEST_FILE) $(DEMO_TEST_FILE) | $(BUILD_DIR)
+$(ESP_READY): Makefile $(BUILD_DIR)/EFI/BOOT/BOOTX64.EFI $(BUILD_DIR)/kernel.elf $(HELLO_PROGRAM_ELF) $(ARGS_PROGRAM_ELF) $(ROOT_TEST_FILE) $(DEMO_TEST_FILE) | $(BUILD_DIR)
 	rm -rf $(ESP_DIR)
 	mkdir -p $(ESP_DIR)/EFI/BOOT $(ESP_DIR)/MYDIR $(ESP_DIR)/BIGDIR
 	cp $(BUILD_DIR)/EFI/BOOT/BOOTX64.EFI $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI
@@ -104,10 +104,19 @@ $(ESP_READY): $(BUILD_DIR)/EFI/BOOT/BOOTX64.EFI $(BUILD_DIR)/kernel.elf $(HELLO_
 	if command -v xattr >/dev/null 2>&1; then xattr -cr $(ESP_DIR) >/dev/null 2>&1 || echo "warning: xattr cleanup failed for $(ESP_DIR); continuing"; fi
 	touch $@
 
-$(DISK_IMAGE): $(ESP_READY) | $(BUILD_DIR)
-	rm -f $@ $@.dmg
+$(DISK_IMAGE): Makefile $(ESP_READY) | $(BUILD_DIR)
+	rm -f $@ $(BUILD_DIR)/funnyos-stage.dmg
 	@if command -v $(HDIUTIL) >/dev/null 2>&1; then \
-		COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 $(HDIUTIL) create -quiet -ov -size $(DISK_IMAGE_SIZE_MB)m -fs "MS-DOS FAT32" -layout NONE -srcfolder $(ESP_DIR) -format UDRW $@.dmg && mv $@.dmg $@; \
+		mount_dir=$$(mktemp -d /tmp/funnyos-mnt.XXXXXX) && \
+		$(HDIUTIL) create -quiet -ov -size $(DISK_IMAGE_SIZE_MB)m -fs "MS-DOS FAT32" -volname FUNNYOS $(BUILD_DIR)/funnyos-stage.dmg && \
+		$(HDIUTIL) attach -quiet -nobrowse -mountpoint "$$mount_dir" $(BUILD_DIR)/funnyos-stage.dmg && \
+		COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 cp -X -R $(ESP_DIR)/. "$$mount_dir"/ && \
+		if command -v dot_clean >/dev/null 2>&1; then dot_clean -m "$$mount_dir" >/dev/null 2>&1 || true; fi && \
+		find "$$mount_dir" \( -name '._*' -o -name '.DS_Store' \) -delete && \
+		sync && \
+		$(HDIUTIL) detach -quiet "$$mount_dir" && \
+		rmdir "$$mount_dir" && \
+		mv $(BUILD_DIR)/funnyos-stage.dmg $@; \
 	else \
 		dd if=/dev/zero of=$@ bs=1m count=0 seek=$(DISK_IMAGE_SIZE_MB) status=none && \
 		$(MFORMAT) -i $@ -F -v FUNNYOS :: && \
