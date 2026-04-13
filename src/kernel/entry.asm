@@ -30,6 +30,9 @@ clear_bss:
     ret
 
 setup_platform:
+    xor r9d, r9d
+    mov r9w, cs
+
     mov rax, cr0
     and rax, ~0x4
     or rax, 0x2
@@ -55,7 +58,7 @@ setup_platform:
     mov r8, rax
     shr r8, 32
     mov word [rdi], ax
-    mov word [rdi + 2], CODE_SEL
+    mov word [rdi + 2], r9w
     mov byte [rdi + 4], 0
     mov byte [rdi + 5], 0x8E
     mov word [rdi + 6], dx
@@ -178,9 +181,6 @@ interrupt_stub_table:
     dq isr_%+i
 %assign i i + 1
 %endrep
-
-CODE_SEL equ 0x08
-
 section .bss
 align 16
 idt_table:
