@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "panic.h"
 #include "paging.h"
+#include "pci.h"
 #include "shell.h"
 
 void kmain(const BootInfo* boot_info)
@@ -19,12 +20,15 @@ void kmain(const BootInfo* boot_info)
     if (!memory_self_test()) {
         panic("Memory self-test failed");
     }
-
-    if (!fs_init(boot_info)) {
-        panic("FS init failed");
+    if (!pci_init()) {
+        panic("PCI init failed");
     }
     if (!paging_init(boot_info)) {
         panic("Paging init failed");
+    }
+
+    if (!fs_init(boot_info)) {
+        panic("FS init failed");
     }
     shell_run();
 }

@@ -24,12 +24,14 @@ static uint16_t g_ata_io_base = ATA_PRIMARY_IO_BASE;
 static uint16_t g_ata_ctrl_base = ATA_PRIMARY_CTRL_BASE;
 static uint8_t g_ata_drive_head = 0xE0u;
 
-bool ata_init(uint8_t bios_drive)
+bool ata_init(const AtaDeviceAddress* device)
 {
-    if (bios_drive < 0x80u || bios_drive > 0x83u)
+    if (device == NULL)
+        return false;
+    if (device->channel > 1u || device->drive > 1u)
         return false;
 
-    switch (bios_drive - 0x80u) {
+    switch ((device->channel << 1u) | device->drive) {
     case 0u:
         g_ata_io_base = ATA_PRIMARY_IO_BASE;
         g_ata_ctrl_base = ATA_PRIMARY_CTRL_BASE;
