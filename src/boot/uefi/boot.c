@@ -321,10 +321,15 @@ static EFI_STATUS map_framebuffer_format(const EFI_GRAPHICS_OUTPUT_MODE_INFORMAT
 
 static EFI_STATUS select_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop)
 {
+    const uint32_t preferred_max_width = 1024u;
+    const uint32_t preferred_max_height = 768u;
     uint32_t mode;
-    uint32_t best_mode = 0u;
-    uint64_t best_area = 0u;
-    bool found = false;
+    uint32_t best_preferred_mode = 0u;
+    uint64_t best_preferred_area = 0u;
+    bool found_preferred = false;
+    uint32_t best_fallback_mode = 0u;
+    uint64_t best_fallback_area = 0u;
+    bool found_fallback = false;
     EFI_STATUS status = EFI_SUCCESS;
 
     if (gop == NULL || gop->Mode == NULL || gop->Mode->Info == NULL)
@@ -340,24 +345,38 @@ static EFI_STATUS select_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop)
             continue;
 
         if (!EFI_ERROR(map_framebuffer_format(info, &format))) {
+            uint32_t width = info->HorizontalResolution;
+            uint32_t height = info->VerticalResolution;
             uint64_t area = (uint64_t)info->HorizontalResolution * (uint64_t)info->VerticalResolution;
 
-            if (!found || area > best_area) {
-                best_mode = mode;
-                best_area = area;
-                found = true;
+            if (width <= preferred_max_width && height <= preferred_max_height) {
+                if (!found_preferred || area > best_preferred_area) {
+                    best_preferred_mode = mode;
+                    best_preferred_area = area;
+                    found_preferred = true;
+                }
+            } else if (!found_fallback || area < best_fallback_area) {
+                best_fallback_mode = mode;
+                best_fallback_area = area;
+                found_fallback = true;
             }
         }
 
         g_bs->FreePool(info);
     }
 
-    if (!found)
+    if (!found_preferred && !found_fallback)
         return 1;
-    if (gop->Mode->Mode == best_mode)
+
+    if (found_preferred)
+        mode = best_preferred_mode;
+    else
+        mode = best_fallback_mode;
+
+    if (gop->Mode->Mode == mode)
         return EFI_SUCCESS;
 
-    return gop->SetMode(gop, best_mode);
+    return gop->SetMode(gop, mode);
 }
 
 static EFI_STATUS gather_graphics_info(BootInfo* boot_info)
