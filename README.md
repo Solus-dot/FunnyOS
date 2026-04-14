@@ -69,19 +69,19 @@ Build the disk image:
 make image
 ```
 
-Boot the OS under QEMU + OVMF with the legacy IDE model:
+Boot the OS under QEMU + OVMF with the legacy IDE model in a normal QEMU window:
 
 ```sh
 make run
 ```
 
-Boot the OS under QEMU + OVMF with an AHCI-backed SATA disk:
+Boot the OS under QEMU + OVMF with an AHCI-backed SATA disk in a normal QEMU window:
 
 ```sh
 make run-ahci
 ```
 
-Window-only variants are also available, but they currently depend on the framebuffer console path working on your host/QEMU setup:
+Explicit window-only aliases:
 
 ```sh
 make run-window
@@ -114,7 +114,7 @@ make run-headless
 make run-ahci-headless
 ```
 
-`make run` and `make run-ahci` keep the reliable serial-terminal workflow. The `*-window` targets leave input/output in the QEMU window only, which may not work yet if the kernel does not get a usable framebuffer console on your setup.
+`make run` and `make run-ahci` use the QEMU window path. The `*-headless` targets keep serial-terminal I/O.
 
 ## Boot And Runtime Layout
 

@@ -246,6 +246,79 @@ static EFI_STATUS query_console(UINTN* cols_out, UINTN* rows_out)
     return EFI_SUCCESS;
 }
 
+static EFI_STATUS locate_graphics_output_protocol(EFI_GRAPHICS_OUTPUT_PROTOCOL** gop_out)
+{
+    EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
+    EFI_STATUS status;
+
+    if (gop_out == NULL)
+        return 1;
+
+    status = open_protocol(g_st->ConsoleOutHandle, &gEfiGraphicsOutputProtocolGuid, (void**)&gop);
+    if (!EFI_ERROR(status) && gop != NULL && gop->Mode != NULL && gop->Mode->Info != NULL) {
+        *gop_out = gop;
+        return EFI_SUCCESS;
+    }
+
+    {
+        EFI_HANDLE* handles = NULL;
+        UINTN handle_count = 0u;
+        UINTN i;
+
+        status = g_bs->LocateHandleBuffer(EFI_BY_PROTOCOL, &gEfiGraphicsOutputProtocolGuid, NULL, &handle_count, &handles);
+        if (EFI_ERROR(status))
+            return status;
+        if (handles == NULL || handle_count == 0u)
+            return 1;
+
+        for (i = 0u; i < handle_count; ++i) {
+            gop = NULL;
+            status = open_protocol(handles[i], &gEfiGraphicsOutputProtocolGuid, (void**)&gop);
+            if (!EFI_ERROR(status) && gop != NULL && gop->Mode != NULL && gop->Mode->Info != NULL) {
+                g_bs->FreePool(handles);
+                *gop_out = gop;
+                return EFI_SUCCESS;
+            }
+        }
+
+        g_bs->FreePool(handles);
+    }
+
+    return 1;
+}
+
+static EFI_STATUS map_framebuffer_format(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* mode_info, uint32_t* format_out)
+{
+    if (mode_info == NULL || format_out == NULL)
+        return 1;
+
+    if (mode_info->PixelFormat == 0u) {
+        *format_out = BOOTINFO_FRAMEBUFFER_FORMAT_RGBX;
+        return EFI_SUCCESS;
+    }
+    if (mode_info->PixelFormat == 1u) {
+        *format_out = BOOTINFO_FRAMEBUFFER_FORMAT_BGRX;
+        return EFI_SUCCESS;
+    }
+
+    if (mode_info->PixelFormat == 2u) {
+        uint32_t red_mask = mode_info->PixelInformation.RedMask;
+        uint32_t green_mask = mode_info->PixelInformation.GreenMask;
+        uint32_t blue_mask = mode_info->PixelInformation.BlueMask;
+
+        if (red_mask == 0x000000FFu && green_mask == 0x0000FF00u && blue_mask == 0x00FF0000u) {
+            *format_out = BOOTINFO_FRAMEBUFFER_FORMAT_RGBX;
+            return EFI_SUCCESS;
+        }
+        if (red_mask == 0x00FF0000u && green_mask == 0x0000FF00u && blue_mask == 0x000000FFu) {
+            *format_out = BOOTINFO_FRAMEBUFFER_FORMAT_BGRX;
+            return EFI_SUCCESS;
+        }
+    }
+
+    return 1;
+}
+
 static EFI_STATUS gather_graphics_info(BootInfo* boot_info)
 {
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
@@ -254,7 +327,7 @@ static EFI_STATUS gather_graphics_info(BootInfo* boot_info)
     if (boot_info == NULL)
         return 1;
 
-    status = open_protocol(g_st->ConsoleOutHandle, &gEfiGraphicsOutputProtocolGuid, (void**)&gop);
+    status = locate_graphics_output_protocol(&gop);
     if (EFI_ERROR(status) || gop == NULL || gop->Mode == NULL || gop->Mode->Info == NULL)
         return status;
 
@@ -263,11 +336,8 @@ static EFI_STATUS gather_graphics_info(BootInfo* boot_info)
     boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
     boot_info->framebuffer_pixels_per_scanline = gop->Mode->Info->PixelsPerScanLine;
 
-    if (gop->Mode->Info->PixelFormat == 0u)
-        boot_info->framebuffer_format = BOOTINFO_FRAMEBUFFER_FORMAT_RGBX;
-    else if (gop->Mode->Info->PixelFormat == 1u)
-        boot_info->framebuffer_format = BOOTINFO_FRAMEBUFFER_FORMAT_BGRX;
-    else
+    status = map_framebuffer_format(gop->Mode->Info, &boot_info->framebuffer_format);
+    if (EFI_ERROR(status))
         return 1;
 
     boot_info->console_flags |= BOOTINFO_CONSOLE_FRAMEBUFFER;
@@ -441,7 +511,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* system_tab
 
     mem_set(boot_info, 0, sizeof(*boot_info));
     boot_info->magic = BOOTINFO_MAGIC;
-    boot_info->console_flags = BOOTINFO_CONSOLE_TEXT;
+    boot_info->console_flags = BOOTINFO_CONSOLE_TEXT | BOOTINFO_CONSOLE_VGA_TEXT;
     if (!EFI_ERROR(query_console(&columns, &rows))) {
         boot_info->screen_columns = (uint16_t)columns;
         boot_info->screen_rows = (uint16_t)rows;

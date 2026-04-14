@@ -57,7 +57,7 @@ all: image
 image: check-build-tools $(DISK_IMAGE)
 
 run: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
-	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -drive format=raw,file=$(DISK_IMAGE),if=ide -serial stdio -monitor none
+	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -drive format=raw,file=$(DISK_IMAGE),if=ide -serial none -monitor none
 
 run-headless: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
 	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -drive format=raw,file=$(DISK_IMAGE),if=ide -display none -serial stdio -monitor none
@@ -66,7 +66,7 @@ run-window: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
 	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -drive format=raw,file=$(DISK_IMAGE),if=ide -serial none -monitor none
 
 run-ahci: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
-	$(QEMU) -machine q35 -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -device ich9-ahci,id=ahci -drive id=disk,file=$(DISK_IMAGE),if=none,format=raw -device ide-hd,drive=disk,bus=ahci.0 -serial stdio -monitor none
+	$(QEMU) -machine q35 -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -device ich9-ahci,id=ahci -drive id=disk,file=$(DISK_IMAGE),if=none,format=raw -device ide-hd,drive=disk,bus=ahci.0 -serial none -monitor none
 
 run-ahci-headless: check-run-tools image $(BUILD_DIR)/ovmf-vars.fd
 	$(QEMU) -machine q35 -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) -drive if=pflash,format=raw,file=$(BUILD_DIR)/ovmf-vars.fd -device ich9-ahci,id=ahci -drive id=disk,file=$(DISK_IMAGE),if=none,format=raw -device ide-hd,drive=disk,bus=ahci.0 -display none -serial stdio -monitor none
