@@ -319,6 +319,47 @@ static EFI_STATUS map_framebuffer_format(const EFI_GRAPHICS_OUTPUT_MODE_INFORMAT
     return 1;
 }
 
+static EFI_STATUS select_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop)
+{
+    uint32_t mode;
+    uint32_t best_mode = 0u;
+    uint64_t best_area = 0u;
+    bool found = false;
+    EFI_STATUS status = EFI_SUCCESS;
+
+    if (gop == NULL || gop->Mode == NULL || gop->Mode->Info == NULL)
+        return 1;
+
+    for (mode = 0u; mode < gop->Mode->MaxMode; ++mode) {
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* info = NULL;
+        UINTN info_size = 0u;
+        uint32_t format = 0u;
+
+        status = gop->QueryMode(gop, mode, &info_size, &info);
+        if (EFI_ERROR(status) || info == NULL)
+            continue;
+
+        if (!EFI_ERROR(map_framebuffer_format(info, &format))) {
+            uint64_t area = (uint64_t)info->HorizontalResolution * (uint64_t)info->VerticalResolution;
+
+            if (!found || area > best_area) {
+                best_mode = mode;
+                best_area = area;
+                found = true;
+            }
+        }
+
+        g_bs->FreePool(info);
+    }
+
+    if (!found)
+        return 1;
+    if (gop->Mode->Mode == best_mode)
+        return EFI_SUCCESS;
+
+    return gop->SetMode(gop, best_mode);
+}
+
 static EFI_STATUS gather_graphics_info(BootInfo* boot_info)
 {
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
@@ -330,11 +371,21 @@ static EFI_STATUS gather_graphics_info(BootInfo* boot_info)
     status = locate_graphics_output_protocol(&gop);
     if (EFI_ERROR(status) || gop == NULL || gop->Mode == NULL || gop->Mode->Info == NULL)
         return status;
+    status = select_graphics_mode(gop);
+    if (EFI_ERROR(status))
+        return status;
+    if (gop->Mode == NULL || gop->Mode->Info == NULL)
+        return 1;
 
     boot_info->framebuffer_base = (uintptr_t)gop->Mode->FrameBufferBase;
     boot_info->framebuffer_width = gop->Mode->Info->HorizontalResolution;
     boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
     boot_info->framebuffer_pixels_per_scanline = gop->Mode->Info->PixelsPerScanLine;
+    if (boot_info->framebuffer_base == 0u
+        || boot_info->framebuffer_width == 0u
+        || boot_info->framebuffer_height == 0u
+        || boot_info->framebuffer_pixels_per_scanline < boot_info->framebuffer_width)
+        return 1;
 
     status = map_framebuffer_format(gop->Mode->Info, &boot_info->framebuffer_format);
     if (EFI_ERROR(status))
