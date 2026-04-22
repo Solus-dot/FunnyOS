@@ -44,4 +44,30 @@ static inline void cpu_pause(void)
     __asm__ volatile("pause");
 }
 
+static inline uint64_t io_rdtsc(void)
+{
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    return (uint64_t)low | ((uint64_t)high << 32u);
+}
+
+static inline uint64_t io_rdmsr(uint32_t msr)
+{
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+    return (uint64_t)low | ((uint64_t)high << 32u);
+}
+
+static inline void io_wrmsr(uint32_t msr, uint64_t value)
+{
+    __asm__ volatile(
+        "wrmsr"
+        :
+        : "c"(msr), "a"((uint32_t)value), "d"((uint32_t)(value >> 32u)));
+}
+
 #endif

@@ -1,4 +1,6 @@
 #include "../common/bootinfo.h"
+#include "acpi.h"
+#include "apic.h"
 #include "console.h"
 #include "fs.h"
 #include "memory.h"
@@ -6,6 +8,7 @@
 #include "paging.h"
 #include "pci.h"
 #include "shell.h"
+#include "timer.h"
 
 void kmain(const BootInfo* boot_info)
 {
@@ -25,6 +28,15 @@ void kmain(const BootInfo* boot_info)
     }
     if (!paging_init(boot_info)) {
         panic("Paging init failed");
+    }
+    if (!acpi_init(boot_info)) {
+        panic("ACPI init failed");
+    }
+    if (!apic_init(acpi_platform_info())) {
+        panic("APIC init failed");
+    }
+    if (!timer_init()) {
+        panic("Timer init failed");
     }
 
     if (!fs_init(boot_info)) {
