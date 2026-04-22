@@ -14,6 +14,7 @@ typedef enum ProcessState {
 } ProcessState;
 
 typedef struct ProcessAddressSpace {
+    uintptr_t page_table_root;
     uintptr_t image_base;
     uintptr_t stack_base;
     uintptr_t stack_top;
@@ -54,6 +55,8 @@ typedef struct Process {
 void process_init(Process* process);
 bool process_run_foreground(Process* process, const char* path, const char* command, const char* argument_line, const char* cwd);
 bool process_handle_syscall(TrapFrame* frame);
+bool process_should_return_to_kernel(void);
+bool process_handle_fault(TrapFrame* frame);
 Process* process_foreground(void);
 
 #endif

@@ -1,12 +1,18 @@
 [BITS 64]
 
 global _start
+global platform_set_tss_rsp0
 extern kmain
 extern interrupt_dispatch
 extern __bss_start
 extern __bss_end
 
 SYSCALL_VECTOR equ 0x80
+KERNEL_CODE_SELECTOR equ 0x08
+KERNEL_DATA_SELECTOR equ 0x10
+USER_DATA_SELECTOR equ 0x1B
+USER_CODE_SELECTOR equ 0x23
+TSS_SELECTOR equ 0x28
 
 section .text
 _start:
@@ -32,8 +38,9 @@ clear_bss:
     ret
 
 setup_platform:
+    call load_gdt_tss
     xor r9d, r9d
-    mov r9w, cs
+    mov r9w, KERNEL_CODE_SELECTOR
 
     mov rax, cr0
     and rax, ~0x4
@@ -74,6 +81,63 @@ setup_platform:
     lidt [rel idt_descriptor]
     ret
 
+load_gdt_tss:
+    mov rax, tss64
+    mov rcx, tss64_end - tss64 - 1
+    xor rdx, rdx
+
+    mov rdx, rcx
+    and rdx, 0xFFFF
+
+    mov r8, rax
+    and r8, 0xFFFFFF
+    shl r8, 16
+    or rdx, r8
+
+    mov r8, 0x89
+    shl r8, 40
+    or rdx, r8
+
+    mov r8, rcx
+    and r8, 0xF0000
+    shl r8, 32
+    or rdx, r8
+
+    mov r8, rax
+    mov r9, 0xFF000000
+    and r8, r9
+    shl r8, 32
+    or rdx, r8
+
+    mov [rel gdt_tss_low], rdx
+    mov rdx, rax
+    shr rdx, 32
+    mov [rel gdt_tss_high], rdx
+
+    lgdt [rel gdt_descriptor]
+
+    mov ax, KERNEL_DATA_SELECTOR
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
+    push qword KERNEL_CODE_SELECTOR
+    lea rax, [rel .reload_cs]
+    push rax
+    retfq
+
+.reload_cs:
+    mov qword [rel tss64 + 4], stack_top
+    mov ax, TSS_SELECTOR
+    ltr ax
+    ret
+
+platform_set_tss_rsp0:
+    mov [rel tss64 + 4], rdi
+    ret
+
 exception_common:
     cld
     push r15
@@ -91,6 +155,11 @@ exception_common:
     push rcx
     push rbx
     push rax
+    mov ax, KERNEL_DATA_SELECTOR
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
     lea rax, [rsp + 160]
     push rax
     mov rbx, rsp
@@ -173,6 +242,24 @@ ISR_NOERR i
 
 section .rodata
 align 16
+gdt_descriptor:
+    dw gdt_end - gdt_start - 1
+    dq gdt_start
+
+align 8
+gdt_start:
+    dq 0
+    dq 0x00AF9B000000FFFF
+    dq 0x00CF93000000FFFF
+    dq 0x00CFF3000000FFFF
+    dq 0x00AFFB000000FFFF
+gdt_tss_low:
+    dq 0
+gdt_tss_high:
+    dq 0
+gdt_end:
+
+align 16
 idt_descriptor:
     dw (256 * 16) - 1
     dq idt_table
@@ -185,10 +272,14 @@ interrupt_stub_table:
 %assign i i + 1
 %endrep
 section .bss
-align 16
+alignb 16
+tss64:
+    resb 104
+tss64_end:
+alignb 16
 idt_table:
     resb 256 * 16
-align 16
+alignb 16
 stack_bottom:
     resb 16384
 stack_top:

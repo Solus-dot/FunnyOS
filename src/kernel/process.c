@@ -64,7 +64,6 @@ typedef struct ProcessUserContext {
 } ProcessUserContext;
 
 extern uint64_t program_invoke(uintptr_t entry_point, uintptr_t info_ptr, uintptr_t stack_top);
-extern void program_exit_resume(void);
 extern uint8_t __kernel_image_end;
 
 static Process g_foreground_process;
@@ -77,12 +76,12 @@ static size_t bytes_to_pages(size_t size)
 
 static uintptr_t align_down_page(uintptr_t value)
 {
-    return value & ~(PAGE_SIZE - 1u);
+    return value & ~((uintptr_t)PAGE_SIZE - 1u);
 }
 
 static uintptr_t align_up_page(uintptr_t value)
 {
-    return (value + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+    return (value + (uintptr_t)PAGE_SIZE - 1u) & ~((uintptr_t)PAGE_SIZE - 1u);
 }
 
 static void process_write_u32(uint32_t value)
@@ -179,16 +178,14 @@ static bool process_stage_user_context(Process* process)
     return true;
 }
 
-static void process_finish_exit(Process* process, uint32_t status, TrapFrame* frame)
+static void process_finish_exit(Process* process, uint32_t status)
 {
-    if (process == NULL || frame == NULL)
+    if (process == NULL)
         return;
 
     process->runtime.exit_requested = true;
     process->runtime.exit_status = status;
     process->state = PROCESS_STATE_EXITED;
-    frame->rax = 1u;
-    frame->rip = (uintptr_t)&program_exit_resume;
 }
 
 static void process_reset_fields(Process* process)
@@ -317,7 +314,7 @@ static bool process_configure_image_layout(Process* process, uint32_t file_size)
         return false;
     }
     if (image_min < (uintptr_t)&__kernel_image_end) {
-        console_write_line("program load failed");
+        console_write_line("program image overlaps kernel");
         return false;
     }
     if (header->entry < image_min || header->entry >= image_end) {
@@ -374,11 +371,12 @@ static bool process_load_binary(Process* process, const char* path)
 {
     FsNodeInfo node;
     ProcessLoadContext load_context;
+    uintptr_t previous_root;
 
     if (fs_stat(path, &node) != FS_OK)
         return false;
     if (node.type != FS_NODE_FILE) {
-        console_write_line("program load failed");
+        console_write_line("program path is not a file");
         return false;
     }
     if (node.size > process->address_space.file_capacity) {
@@ -392,52 +390,97 @@ static bool process_load_binary(Process* process, const char* path)
     k_memset(load_context.dst, 0, process->address_space.file_capacity);
 
     if (fs_read_file(path, process_file_chunk_copy, &load_context) != FS_OK) {
-        console_write_line("program load failed");
+        console_write_line("program read failed");
         return false;
     }
     if (load_context.size != node.size) {
-        console_write_line("program load failed");
+        console_write_line("program size mismatch");
         return false;
     }
 
     if (!process_configure_image_layout(process, load_context.size))
         return false;
-    if (!process_prepare_address_space(process))
+    if (!process_prepare_address_space(process)) {
+        console_write_line("program address space setup failed");
         return false;
-    if (!process_stage_user_context(process))
+    }
+
+    previous_root = paging_current_root();
+    paging_activate_root(process->address_space.page_table_root);
+    if (!process_stage_user_context(process)) {
+        console_write_line("program user context setup failed");
+        paging_activate_root(previous_root);
         return false;
-    return process_copy_image_segments(process, load_context.size);
+    }
+    if (!process_copy_image_segments(process, load_context.size)) {
+        console_write_line("program image copy failed");
+        paging_activate_root(previous_root);
+        return false;
+    }
+    paging_activate_root(previous_root);
+    return true;
 }
 
 static bool process_prepare_address_space(Process* process)
 {
-    process->address_space.image_backing = alloc_pages(process->address_space.image_page_count);
-    if (process->address_space.image_backing == NULL)
+    if (process == NULL)
         return false;
+
+    process->address_space.page_table_root = paging_create_address_space();
+    if (process->address_space.page_table_root == 0u) {
+        console_write_line("program: page table alloc failed");
+        return false;
+    }
+
+    process->address_space.image_backing = alloc_pages(process->address_space.image_page_count);
+    if (process->address_space.image_backing == NULL) {
+        console_write_line("program: image backing alloc failed");
+        goto fail;
+    }
 
     process->address_space.stack_backing = alloc_pages(process->address_space.stack_page_count);
-    if (process->address_space.stack_backing == NULL)
-        return false;
+    if (process->address_space.stack_backing == NULL) {
+        console_write_line("program: stack backing alloc failed");
+        goto fail;
+    }
 
-    if (!paging_map_range(
+    if (!paging_map_user_range(
+            process->address_space.page_table_root,
             process->address_space.image_base,
             (uintptr_t)process->address_space.image_backing,
             process->address_space.image_capacity,
             true,
-            true))
-        return false;
+            true)) {
+        console_write_line("program: image map failed");
+        goto fail;
+    }
 
-    if (!paging_map_range(
+    if (!paging_map_user_range(
+            process->address_space.page_table_root,
             process->address_space.stack_base,
             (uintptr_t)process->address_space.stack_backing,
             process->address_space.stack_size,
             true,
-            false))
-        return false;
-
-    k_memset((void*)process->address_space.image_base, 0, process->address_space.image_capacity);
-    k_memset((void*)process->address_space.stack_base, 0, process->address_space.stack_size);
+            false)) {
+        console_write_line("program: stack map failed");
+        goto fail;
+    }
     return true;
+
+fail:
+    if (process->address_space.stack_backing != NULL) {
+        free_pages(process->address_space.stack_backing, process->address_space.stack_page_count);
+        process->address_space.stack_backing = NULL;
+    }
+    if (process->address_space.image_backing != NULL) {
+        free_pages(process->address_space.image_backing, process->address_space.image_page_count);
+        process->address_space.image_backing = NULL;
+    }
+    if (process->address_space.page_table_root != 0u) {
+        paging_destroy_address_space(process->address_space.page_table_root);
+        process->address_space.page_table_root = 0u;
+    }
+    return false;
 }
 
 static void process_release_address_space(Process* process)
@@ -446,23 +489,11 @@ static void process_release_address_space(Process* process)
         return;
 
     if (process->address_space.image_backing != NULL) {
-        (void)paging_map_range(
-            process->address_space.image_base,
-            process->address_space.image_base,
-            process->address_space.image_capacity,
-            true,
-            true);
         free_pages(process->address_space.image_backing, process->address_space.image_page_count);
         process->address_space.image_backing = NULL;
     }
 
     if (process->address_space.stack_backing != NULL) {
-        (void)paging_map_range(
-            process->address_space.stack_base,
-            process->address_space.stack_base,
-            process->address_space.stack_size,
-            true,
-            true);
         free_pages(process->address_space.stack_backing, process->address_space.stack_page_count);
         process->address_space.stack_backing = NULL;
     }
@@ -471,6 +502,11 @@ static void process_release_address_space(Process* process)
         free_pages(process->address_space.file_buffer, process->address_space.file_page_count);
         process->address_space.file_buffer = NULL;
         process->image.file_buffer = NULL;
+    }
+
+    if (process->address_space.page_table_root != 0u) {
+        paging_destroy_address_space(process->address_space.page_table_root);
+        process->address_space.page_table_root = 0u;
     }
 
     process->runtime.user_info_addr = 0u;
@@ -488,19 +524,20 @@ void process_init(Process* process)
 bool process_run_foreground(Process* process, const char* path, const char* command, const char* argument_line, const char* cwd)
 {
     uint64_t invoke_result;
+    uintptr_t kernel_root;
 
     if (process == NULL || path == NULL || command == NULL || cwd == NULL)
         return false;
 
     process_init(process);
     if (!process_tokenize_args(process, command, argument_line)) {
-        console_write_line("program load failed");
+        console_write_line("program args invalid");
         return false;
     }
 
     process->address_space.file_buffer = alloc_pages(process->address_space.file_page_count);
     if (process->address_space.file_buffer == NULL) {
-        console_write_line("program load failed");
+        console_write_line("program file buffer alloc failed");
         process_release_address_space(process);
         return false;
     }
@@ -516,10 +553,13 @@ bool process_run_foreground(Process* process, const char* path, const char* comm
     process->runtime.exit_status = 0u;
     process->state = PROCESS_STATE_RUNNING;
     g_active_process = process;
+    kernel_root = paging_current_root();
+    paging_activate_root(process->address_space.page_table_root);
     invoke_result = program_invoke(
         process->image.entry_point,
         process->runtime.user_info_addr,
         process->address_space.stack_top);
+    paging_activate_root(kernel_root);
     g_active_process = NULL;
 
     if (invoke_result == 0u) {
@@ -553,7 +593,8 @@ bool process_handle_syscall(TrapFrame* frame)
 
     switch ((uint32_t)frame->rax) {
     case PROGRAM_SYSCALL_EXIT:
-        process_finish_exit(process, (uint32_t)frame->rdi, frame);
+        process_finish_exit(process, (uint32_t)frame->rdi);
+        frame->rax = 1u;
         return true;
     case PROGRAM_SYSCALL_WRITE:
         if (!process_user_range_valid(process, (uintptr_t)frame->rdi, (size_t)frame->rsi)) {
@@ -578,6 +619,24 @@ bool process_handle_syscall(TrapFrame* frame)
         frame->rax = 0u;
         return true;
     }
+}
+
+bool process_should_return_to_kernel(void)
+{
+    return g_active_process != NULL && g_active_process->runtime.exit_requested;
+}
+
+bool process_handle_fault(TrapFrame* frame)
+{
+    Process* process = g_active_process;
+
+    if (frame == NULL || process == NULL)
+        return false;
+    if ((frame->cs & 0x3u) != 0x3u)
+        return false;
+
+    process_finish_exit(process, 0xFFFFFFFFu);
+    return true;
 }
 
 Process* process_foreground(void)

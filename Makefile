@@ -48,7 +48,7 @@ DEMO_TEST_FILE := test.txt
 
 UEFI_BOOT_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -fshort-wchar -m64 -mno-red-zone -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/boot/uefi
 KERNEL_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -m64 -mno-red-zone -mcmodel=small -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/kernel
-PROGRAM_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -m64 -mno-red-zone -mcmodel=small -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/programs/common
+PROGRAM_CFLAGS := -ffreestanding -fno-pic -fno-pie -fno-stack-protector -m64 -mno-red-zone -mcmodel=large -Wall -Wextra -Werror -std=c11 -I$(SRC_DIR)/common -I$(SRC_DIR)/programs/common
 
 .PHONY: all image run run-headless run-window run-ahci run-ahci-headless run-ahci-window debug debug-headless debug-ahci debug-ahci-headless test clean check-build-tools check-run-tools
 
