@@ -111,6 +111,11 @@ typedef struct EFI_SYSTEM_TABLE {
     void* ConfigurationTable;
 } EFI_SYSTEM_TABLE;
 
+typedef struct EFI_CONFIGURATION_TABLE {
+    EFI_GUID VendorGuid;
+    void* VendorTable;
+} EFI_CONFIGURATION_TABLE;
+
 struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
     void* RaiseTPL;

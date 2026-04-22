@@ -25,6 +25,9 @@ typedef struct BootInfo {
     uint16_t bytes_per_sector;
     uint32_t partition_lba_start;
     uint32_t partition_sector_count;
+    uintptr_t acpi_rsdp;
+    uint8_t acpi_revision;
+    uint8_t reserved0[7];
     uint16_t boot_device_path_size;
     uint8_t boot_device_path[BOOTINFO_DEVICE_PATH_CAPACITY];
     uint16_t console_flags;

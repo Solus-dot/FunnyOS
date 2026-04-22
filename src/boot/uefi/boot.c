@@ -48,6 +48,8 @@ EFI_GUID gEfiFileInfoGuid = {0x09576E92u, 0x6D3Fu, 0x11d2u, {0x8Eu, 0x39u, 0x00u
 EFI_GUID gEfiBlockIoProtocolGuid = {0x964E5B21u, 0x6459u, 0x11d2u, {0x8Eu, 0x39u, 0x00u, 0xA0u, 0xC9u, 0x69u, 0x72u, 0x3Bu}};
 EFI_GUID gEfiDevicePathProtocolGuid = {0x09576E91u, 0x6D3Fu, 0x11d2u, {0x8Eu, 0x39u, 0x00u, 0xA0u, 0xC9u, 0x69u, 0x72u, 0x3Bu}};
 EFI_GUID gEfiGraphicsOutputProtocolGuid = {0x9042A9DEu, 0x23DCu, 0x4A38u, {0x96u, 0xFBu, 0x7Au, 0xDEu, 0xD0u, 0x80u, 0x51u, 0x6Au}};
+static const EFI_GUID gEfiAcpi20TableGuid = {0x8868E871u, 0xE4F1u, 0x11D3u, {0xBCu, 0x22u, 0x00u, 0x80u, 0xC7u, 0x3Cu, 0x88u, 0x81u}};
+static const EFI_GUID gEfiAcpi10TableGuid = {0xEB9D2D30u, 0x2D88u, 0x11D3u, {0x9Au, 0x16u, 0x00u, 0x00u, 0x98u, 0x3Cu, 0x97u, 0x3Cu}};
 
 static EFI_SYSTEM_TABLE* g_st = NULL;
 static EFI_BOOT_SERVICES* g_bs = NULL;
@@ -97,6 +99,21 @@ static void* mem_copy(void* dst, const void* src, UINTN size)
     for (i = 0; i < size; ++i)
         out[i] = in[i];
     return dst;
+}
+
+static bool guid_equal(const EFI_GUID* a, const EFI_GUID* b)
+{
+    UINTN i;
+
+    if (a == NULL || b == NULL)
+        return false;
+    if (a->Data1 != b->Data1 || a->Data2 != b->Data2 || a->Data3 != b->Data3)
+        return false;
+    for (i = 0u; i < sizeof(a->Data4); ++i) {
+        if (a->Data4[i] != b->Data4[i])
+            return false;
+    }
+    return true;
 }
 
 static UINTN align_up(UINTN value, UINTN align)
@@ -490,6 +507,34 @@ static EFI_STATUS gather_boot_device_info(EFI_HANDLE device, BootInfo* boot_info
     return EFI_SUCCESS;
 }
 
+static EFI_STATUS gather_acpi_info(BootInfo* boot_info)
+{
+    EFI_CONFIGURATION_TABLE* table;
+    UINTN i;
+
+    if (boot_info == NULL || g_st == NULL || g_st->ConfigurationTable == NULL)
+        return 1;
+
+    table = (EFI_CONFIGURATION_TABLE*)g_st->ConfigurationTable;
+    for (i = 0u; i < g_st->NumberOfTableEntries; ++i) {
+        if (guid_equal(&table[i].VendorGuid, &gEfiAcpi20TableGuid) && table[i].VendorTable != NULL) {
+            boot_info->acpi_rsdp = (uintptr_t)table[i].VendorTable;
+            boot_info->acpi_revision = 2u;
+            return EFI_SUCCESS;
+        }
+    }
+
+    for (i = 0u; i < g_st->NumberOfTableEntries; ++i) {
+        if (guid_equal(&table[i].VendorGuid, &gEfiAcpi10TableGuid) && table[i].VendorTable != NULL) {
+            boot_info->acpi_rsdp = (uintptr_t)table[i].VendorTable;
+            boot_info->acpi_revision = 1u;
+            return EFI_SUCCESS;
+        }
+    }
+
+    return 1;
+}
+
 static EFI_STATUS exit_boot_services_with_map(EFI_HANDLE image_handle, BootInfo* boot_info)
 {
     EFI_STATUS status;
@@ -594,6 +639,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* system_tab
     status = gather_block_info(boot_device, &boot_info->bytes_per_sector, &boot_info->partition_sector_count);
     if (EFI_ERROR(status))
         return status;
+    (void)gather_acpi_info(boot_info);
     puts16(L"gathered device info\r\n");
     status = exit_boot_services_with_map(image_handle, boot_info);
     if (EFI_ERROR(status))
