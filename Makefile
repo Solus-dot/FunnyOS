@@ -15,6 +15,7 @@ UEFI_GCC := $(UEFI_PREFIX)gcc
 
 BUILD_DIR := build
 DISK_IMAGE := $(BUILD_DIR)/funnyos.img
+FAT_IMAGE_TOOL := tools/make_fat32_image.py
 ESP_DIR := $(BUILD_DIR)/esp
 ESP_READY := $(BUILD_DIR)/.esp-ready
 DISK_IMAGE_SIZE_MB := 128
@@ -100,9 +101,7 @@ check-build-tools:
 	@command -v $(UEFI_GCC) >/dev/null || { echo "Missing tool: $(UEFI_GCC)"; exit 1; }
 	@test -n "$(OVMF_CODE)" || { echo "Missing OVMF code image"; exit 1; }
 	@test -n "$(OVMF_VARS)" || { echo "Missing OVMF vars image"; exit 1; }
-	@if command -v $(HDIUTIL) >/dev/null 2>&1; then :; \
-	elif command -v $(MFORMAT) >/dev/null 2>&1 && command -v $(MCOPY) >/dev/null 2>&1 && command -v $(MMD) >/dev/null 2>&1; then :; \
-	else echo "Missing disk image tools: need $(HDIUTIL) or mtools ($(MFORMAT), $(MCOPY), $(MMD))"; exit 1; fi
+	@command -v python3 >/dev/null || { echo "Missing tool: python3"; exit 1; }
 
 check-run-tools: check-build-tools
 	@command -v $(QEMU) >/dev/null || { echo "Missing tool: $(QEMU)"; exit 1; }
@@ -123,32 +122,8 @@ $(ESP_READY): Makefile $(BUILD_DIR)/EFI/BOOT/BOOTX64.EFI $(BUILD_DIR)/kernel.elf
 	touch $@
 
 $(DISK_IMAGE): Makefile $(ESP_READY) | $(BUILD_DIR)
-	rm -f $@ $(BUILD_DIR)/funnyos-stage.dmg
-	@if command -v $(HDIUTIL) >/dev/null 2>&1; then \
-		mount_dir=$$(mktemp -d /tmp/funnyos-mnt.XXXXXX) && \
-		$(HDIUTIL) create -quiet -ov -size $(DISK_IMAGE_SIZE_MB)m -fs "MS-DOS FAT32" -volname FUNNYOS $(BUILD_DIR)/funnyos-stage.dmg && \
-		$(HDIUTIL) attach -quiet -nobrowse -mountpoint "$$mount_dir" $(BUILD_DIR)/funnyos-stage.dmg && \
-		COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 cp -X -R $(ESP_DIR)/. "$$mount_dir"/ && \
-		if command -v dot_clean >/dev/null 2>&1; then dot_clean -m "$$mount_dir" >/dev/null 2>&1 || true; fi && \
-		find "$$mount_dir" \( -name '._*' -o -name '.DS_Store' \) -delete && \
-		sync && \
-		$(HDIUTIL) detach -quiet "$$mount_dir" && \
-		rmdir "$$mount_dir" && \
-		mv $(BUILD_DIR)/funnyos-stage.dmg $@; \
-	else \
-		dd if=/dev/zero of=$@ bs=1m count=0 seek=$(DISK_IMAGE_SIZE_MB) status=none && \
-		$(MFORMAT) -i $@ -F -v FUNNYOS :: && \
-		$(MMD) -i $@ ::/EFI ::/EFI/BOOT ::/MYDIR ::/BIGDIR && \
-		$(MCOPY) -i $@ $(ESP_DIR)/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI && \
-		$(MCOPY) -i $@ $(ESP_DIR)/KERNEL.ELF ::/KERNEL.ELF && \
-		$(MCOPY) -i $@ $(ESP_DIR)/HELLO.ELF ::/HELLO.ELF && \
-		$(MCOPY) -i $@ $(ESP_DIR)/ARGS.ELF ::/ARGS.ELF && \
-		$(MCOPY) -i $@ $(ESP_DIR)/TEST.TXT ::/TEST.TXT && \
-		$(MCOPY) -i $@ $(ESP_DIR)/startup.nsh ::/startup.nsh && \
-		$(MCOPY) -i $@ $(ESP_DIR)/BIGFILE.TXT ::/BIGFILE.TXT && \
-		$(MCOPY) -i $@ $(ESP_DIR)/MYDIR/TEST.TXT ::/MYDIR/TEST.TXT && \
-		$(MCOPY) -s -i $@ $(ESP_DIR)/BIGDIR/* ::/BIGDIR/; \
-	fi
+	rm -f $@
+	python3 $(FAT_IMAGE_TOOL) --src $(ESP_DIR) --out $@ --size-mb $(DISK_IMAGE_SIZE_MB) --volume-label FUNNYOS
 
 $(BUILD_DIR)/ovmf-vars.fd: $(OVMF_VARS) | $(BUILD_DIR)
 	cp $< $@
