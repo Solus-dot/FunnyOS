@@ -101,6 +101,7 @@ static uint32_t entries_per_cluster(void);
 static Fat32Result find_entry_in_cluster_dir(uint32_t first_cluster, const char* name, EntryRef* out);
 static Fat32Result find_free_entry_in_cluster_dir(uint32_t first_cluster, uint32_t needed_entries, EntryRef* out);
 static Fat32Result list_cluster_dir(uint32_t first_cluster, Fat32ListCallback callback, void* context);
+static bool is_valid_data_cluster(uint32_t cluster);
 
 static uint32_t entry_first_cluster(const DirectoryEntry* entry)
 {
@@ -171,11 +172,17 @@ static bool write_sectors(uint32_t lba, uint32_t count, const void* data)
 
 static uint32_t fat32_next_cluster(uint32_t cluster)
 {
+    if (!is_valid_data_cluster(cluster))
+        return FAT32_END_OF_CHAIN;
+
     return g_fat[cluster] & 0x0FFFFFFFu;
 }
 
 static void fat32_set_cluster(uint32_t cluster, uint32_t value)
 {
+    if (!is_valid_data_cluster(cluster))
+        return;
+
     g_fat[cluster] = value & 0x0FFFFFFFu;
 }
 
@@ -184,9 +191,16 @@ static uint32_t cluster_to_lba(uint32_t cluster)
     return g_data_lba + (uint32_t)(cluster - 2u) * g_sectors_per_cluster;
 }
 
+static bool is_valid_data_cluster(uint32_t cluster)
+{
+    return cluster >= 2u && cluster < g_total_clusters;
+}
+
 static bool read_cluster(uint32_t cluster)
 {
     if (g_sectors_per_cluster == 0 || g_sectors_per_cluster > FAT32_MAX_CLUSTER_SECTORS)
+        return false;
+    if (!is_valid_data_cluster(cluster))
         return false;
 
     return block_read_sectors(cluster_to_lba(cluster), g_sectors_per_cluster, g_cluster_buffer);
@@ -195,6 +209,8 @@ static bool read_cluster(uint32_t cluster)
 static bool write_cluster(uint32_t cluster)
 {
     if (g_sectors_per_cluster == 0 || g_sectors_per_cluster > FAT32_MAX_CLUSTER_SECTORS)
+        return false;
+    if (!is_valid_data_cluster(cluster))
         return false;
 
     return block_write_sectors(cluster_to_lba(cluster), g_sectors_per_cluster, g_cluster_buffer);
@@ -1345,8 +1361,12 @@ bool fat32_mount(uint32_t partition_lba_start, uint16_t bytes_per_sector)
 {
     const BootSector* boot_sector;
     uint32_t fat_bytes;
+    uint32_t fat_entries;
     uint32_t total_sectors;
+    uint32_t fat_area_sectors;
+    uint32_t non_data_sectors;
     uint32_t data_sectors;
+    uint32_t total_clusters;
 
     if (bytes_per_sector != FAT32_SECTOR_SIZE)
         return false;
@@ -1359,11 +1379,27 @@ bool fat32_mount(uint32_t partition_lba_start, uint16_t bytes_per_sector)
         return false;
     if (boot_sector->sectors_per_cluster == 0 || boot_sector->sectors_per_cluster > FAT32_MAX_CLUSTER_SECTORS)
         return false;
+    if (boot_sector->fat_count == 0 || boot_sector->reserved_sectors == 0u)
+        return false;
     if (boot_sector->root_cluster < 2u)
         return false;
 
     total_sectors = boot_sector->total_sectors16 != 0 ? boot_sector->total_sectors16 : boot_sector->total_sectors32;
     if (total_sectors == 0u)
+        return false;
+    fat_area_sectors = (uint32_t)boot_sector->fat_count * boot_sector->sectors_per_fat32;
+    non_data_sectors = (uint32_t)boot_sector->reserved_sectors + fat_area_sectors;
+    if (non_data_sectors >= total_sectors)
+        return false;
+
+    data_sectors = total_sectors - non_data_sectors;
+    total_clusters = data_sectors / boot_sector->sectors_per_cluster + 2u;
+
+    fat_bytes = (uint32_t)boot_sector->sectors_per_fat32 * FAT32_SECTOR_SIZE;
+    fat_entries = fat_bytes / sizeof(g_fat[0]);
+    if (total_clusters > fat_entries)
+        return false;
+    if (boot_sector->root_cluster >= total_clusters)
         return false;
 
     g_partition_lba = partition_lba_start;
@@ -1376,8 +1412,7 @@ bool fat32_mount(uint32_t partition_lba_start, uint16_t bytes_per_sector)
     g_fat_lba = g_partition_lba + g_reserved_sectors;
     g_data_lba = g_fat_lba + (uint32_t)g_fat_count * g_sectors_per_fat;
     g_cluster_size = (uint32_t)g_sectors_per_cluster * g_bytes_per_sector;
-    data_sectors = total_sectors - (g_reserved_sectors + (uint32_t)g_fat_count * g_sectors_per_fat);
-    g_total_clusters = data_sectors / g_sectors_per_cluster + 2u;
+    g_total_clusters = total_clusters;
 
     fat_bytes = (uint32_t)g_sectors_per_fat * g_bytes_per_sector;
     if (!read_sectors(g_fat_lba, g_sectors_per_fat, g_fat))

@@ -1,6 +1,7 @@
 #include "block.h"
 #include "ahci.h"
 #include "ata.h"
+#include "driver.h"
 #include "pci.h"
 
 #define BLOCK_MAX_PCI_PATH_DEPTH 8u
@@ -59,6 +60,78 @@ typedef struct BlockDevice {
 } BlockDevice;
 
 static BlockDevice g_block_device = {0};
+
+#define BLOCK_DRIVER_KIND_AHCI 1u
+#define BLOCK_DRIVER_KIND_ATA 2u
+
+#define BLOCK_PAYLOAD_KIND 0u
+#define BLOCK_PAYLOAD_0 1u
+#define BLOCK_PAYLOAD_1 2u
+#define BLOCK_PAYLOAD_2 3u
+
+static bool block_driver_match_ahci(const DriverDevice* device)
+{
+    return device != NULL
+        && device->class_type == DRIVER_DEVICE_CLASS_BLOCK
+        && device->payload[BLOCK_PAYLOAD_KIND] == BLOCK_DRIVER_KIND_AHCI;
+}
+
+static bool block_driver_probe_ahci(const DriverDevice* device)
+{
+    AhciDeviceAddress address;
+
+    if (device == NULL)
+        return false;
+
+    address.controller.bus = (uint8_t)device->payload[BLOCK_PAYLOAD_0];
+    address.controller.device = (uint8_t)device->payload[BLOCK_PAYLOAD_1];
+    address.controller.function = (uint8_t)device->payload[BLOCK_PAYLOAD_2];
+    address.port = (uint8_t)device->prog_if;
+    if (!ahci_init(&address))
+        return false;
+
+    g_block_device.backend = BLOCK_BACKEND_AHCI;
+    g_block_device.read_sectors = ahci_read_sectors;
+    g_block_device.write_sectors = ahci_write_sectors;
+    return true;
+}
+
+static bool block_driver_match_ata(const DriverDevice* device)
+{
+    return device != NULL
+        && device->class_type == DRIVER_DEVICE_CLASS_BLOCK
+        && device->payload[BLOCK_PAYLOAD_KIND] == BLOCK_DRIVER_KIND_ATA;
+}
+
+static bool block_driver_probe_ata(const DriverDevice* device)
+{
+    AtaDeviceAddress address;
+
+    if (device == NULL)
+        return false;
+
+    address.channel = (uint8_t)device->payload[BLOCK_PAYLOAD_0];
+    address.drive = (uint8_t)device->payload[BLOCK_PAYLOAD_1];
+    if (!ata_init(&address))
+        return false;
+
+    g_block_device.backend = BLOCK_BACKEND_ATA_PIO;
+    g_block_device.read_sectors = ata_read_sectors;
+    g_block_device.write_sectors = ata_write_sectors;
+    return true;
+}
+
+static const DriverOps g_block_driver_ahci = {
+    .name = "ahci",
+    .match = block_driver_match_ahci,
+    .probe = block_driver_probe_ahci,
+};
+
+static const DriverOps g_block_driver_ata = {
+    .name = "ata",
+    .match = block_driver_match_ata,
+    .probe = block_driver_probe_ata,
+};
 
 static uint16_t device_path_length(const DevicePathNode* node)
 {
@@ -212,6 +285,10 @@ static bool block_boot_path_to_ahci(const BootInfo* boot_info, AhciDeviceAddress
 
 bool block_init(const BootInfo* boot_info)
 {
+    DriverDevice candidates[3];
+    size_t candidate_count = 0u;
+    const DriverOps* bound_driver;
+    const DriverDevice* bound_device;
     AhciDeviceAddress ahci_device;
     AtaDeviceAddress ata_device;
     BlockPathParseResult ata_result;
@@ -219,26 +296,72 @@ bool block_init(const BootInfo* boot_info)
     g_block_device.backend = BLOCK_BACKEND_NONE;
     g_block_device.read_sectors = NULL;
     g_block_device.write_sectors = NULL;
+    driver_core_reset();
+    if (!driver_core_register(&g_block_driver_ahci))
+        return false;
+    if (!driver_core_register(&g_block_driver_ata))
+        return false;
 
-    if (block_boot_path_to_ahci(boot_info, &ahci_device) && ahci_init(&ahci_device)) {
-        g_block_device.backend = BLOCK_BACKEND_AHCI;
-        g_block_device.read_sectors = ahci_read_sectors;
-        g_block_device.write_sectors = ahci_write_sectors;
-        return true;
+    if (block_boot_path_to_ahci(boot_info, &ahci_device)) {
+        DriverDevice* candidate = &candidates[candidate_count++];
+
+        candidate->bus_type = DRIVER_BUS_PCI;
+        candidate->class_type = DRIVER_DEVICE_CLASS_BLOCK;
+        candidate->vendor_id = 0u;
+        candidate->device_id = 0u;
+        candidate->class_code = 0u;
+        candidate->subclass = 0u;
+        candidate->prog_if = ahci_device.port;
+        candidate->reserved0 = 0u;
+        candidate->payload[BLOCK_PAYLOAD_KIND] = BLOCK_DRIVER_KIND_AHCI;
+        candidate->payload[BLOCK_PAYLOAD_0] = ahci_device.controller.bus;
+        candidate->payload[BLOCK_PAYLOAD_1] = ahci_device.controller.device;
+        candidate->payload[BLOCK_PAYLOAD_2] = ahci_device.controller.function;
     }
 
     ata_result = block_boot_path_to_ata(boot_info, &ata_device);
     if (ata_result == BLOCK_PATH_PARSE_INVALID)
         return false;
-    if (ata_result == BLOCK_PATH_PARSE_ABSENT)
-        block_default_ata_device(&ata_device);
-    if (!ata_init(&ata_device))
-        return false;
+    if (ata_result == BLOCK_PATH_PARSE_FOUND) {
+        DriverDevice* candidate = &candidates[candidate_count++];
 
-    g_block_device.backend = BLOCK_BACKEND_ATA_PIO;
-    g_block_device.read_sectors = ata_read_sectors;
-    g_block_device.write_sectors = ata_write_sectors;
-    return true;
+        candidate->bus_type = DRIVER_BUS_FIRMWARE;
+        candidate->class_type = DRIVER_DEVICE_CLASS_BLOCK;
+        candidate->vendor_id = 0u;
+        candidate->device_id = 0u;
+        candidate->class_code = 0u;
+        candidate->subclass = 0u;
+        candidate->prog_if = 0u;
+        candidate->reserved0 = 0u;
+        candidate->payload[BLOCK_PAYLOAD_KIND] = BLOCK_DRIVER_KIND_ATA;
+        candidate->payload[BLOCK_PAYLOAD_0] = ata_device.channel;
+        candidate->payload[BLOCK_PAYLOAD_1] = ata_device.drive;
+        candidate->payload[BLOCK_PAYLOAD_2] = 0u;
+    }
+
+    if (ata_result == BLOCK_PATH_PARSE_ABSENT) {
+        DriverDevice* candidate = &candidates[candidate_count++];
+
+        block_default_ata_device(&ata_device);
+        candidate->bus_type = DRIVER_BUS_FIRMWARE;
+        candidate->class_type = DRIVER_DEVICE_CLASS_BLOCK;
+        candidate->vendor_id = 0u;
+        candidate->device_id = 0u;
+        candidate->class_code = 0u;
+        candidate->subclass = 0u;
+        candidate->prog_if = 0u;
+        candidate->reserved0 = 0u;
+        candidate->payload[BLOCK_PAYLOAD_KIND] = BLOCK_DRIVER_KIND_ATA;
+        candidate->payload[BLOCK_PAYLOAD_0] = ata_device.channel;
+        candidate->payload[BLOCK_PAYLOAD_1] = ata_device.drive;
+        candidate->payload[BLOCK_PAYLOAD_2] = 0u;
+    }
+
+    if (!driver_core_probe(candidates, candidate_count, &bound_driver, &bound_device))
+        return false;
+    (void)bound_driver;
+    (void)bound_device;
+    return g_block_device.read_sectors != NULL && g_block_device.write_sectors != NULL;
 }
 
 bool block_read_sectors(uint32_t lba, uint8_t count, void* out)
